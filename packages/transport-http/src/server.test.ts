@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 import { AgentBridge } from "@uab/core";
-import type { AgentRuntimeAdapter } from "@uab/adapter-sdk";
+import type { AdapterStreamEvent, AgentRuntimeAdapter } from "@uab/adapter-sdk";
 import test from "node:test";
 import { createHttpBridgeServer } from "./server.js";
 
@@ -51,6 +51,48 @@ const a2uiAdapter: AgentRuntimeAdapter = {
             text: "hello"
           }
         ]
+      }
+    };
+  }
+};
+
+const streamingAdapter: AgentRuntimeAdapter = {
+  info: {
+    id: "streaming-test",
+    name: "Streaming Test Runtime"
+  },
+  capabilities() {
+    return {
+      chat: { write: true }
+    };
+  },
+  call() {
+    return {
+      ok: true
+    };
+  },
+  async *stream(): AsyncIterable<AdapterStreamEvent> {
+    yield {
+      type: "text",
+      delta: "hello"
+    };
+    yield {
+      type: "tool_call",
+      name: "search",
+      data: {
+        q: "uab"
+      }
+    };
+    yield {
+      type: "artifact",
+      data: {
+        id: "art_1"
+      }
+    };
+    yield {
+      type: "result",
+      data: {
+        status: "done"
       }
     };
   }
@@ -111,6 +153,57 @@ test("HTTP transport streams bridge calls as AG-UI SSE events", async () => {
       "TEXT_MESSAGE_END",
       "RUN_FINISHED"
     ]);
+  } finally {
+    await close(server);
+  }
+});
+
+test("HTTP transport forwards adapter stream events as AG-UI events", async () => {
+  const bridge = new AgentBridge({
+    adapters: [streamingAdapter]
+  });
+  const server = createHttpBridgeServer({ bridge });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+
+  try {
+    const port = readPort(server);
+
+    const response = await fetch(`http://127.0.0.1:${port}/agui/runs`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        accept: "text/event-stream"
+      },
+      body: JSON.stringify({
+        threadId: "thread_stream",
+        runId: "run_stream",
+        state: {},
+        messages: [],
+        tools: [],
+        context: [],
+        forwardedProps: {
+          uab: {
+            runtime: "streaming-test",
+            method: "chat.stream",
+            params: {}
+          }
+        }
+      })
+    });
+
+    assert.equal(response.status, 200);
+    const body = await response.text();
+    const events = body
+      .split("\n\n")
+      .filter(Boolean)
+      .map((chunk) => JSON.parse(chunk.replace(/^data: /, "")) as { type: string; name?: string; delta?: string });
+
+    assert.equal(events.some((event) => event.type === "TEXT_MESSAGE_CONTENT" && event.delta === "hello"), true);
+    assert.equal(events.some((event) => event.type === "CUSTOM" && event.name === "tool.call"), true);
+    assert.equal(events.some((event) => event.type === "CUSTOM" && event.name === "artifact"), true);
+    assert.equal(events.at(-2)?.type, "RUN_FINISHED");
+    assert.equal(events.at(-1)?.type, "TEXT_MESSAGE_END");
   } finally {
     await close(server);
   }

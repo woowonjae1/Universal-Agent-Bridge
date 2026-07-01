@@ -1,6 +1,8 @@
 import { spawn } from "node:child_process";
 import {
   AdapterError,
+  type AdapterCallRequest,
+  type AdapterStreamEvent,
   type AdapterHealth,
   type AgentRuntimeAdapter,
   type RuntimeCapabilities,
@@ -29,6 +31,13 @@ type GatewayFrame =
   | { type: "req"; id: string; method: string; params?: unknown }
   | { type: "res"; id: string; ok: boolean; payload?: unknown; error?: unknown }
   | { type: "event"; event: string; payload?: unknown; seq?: number; stateVersion?: number };
+
+interface OpenClawGatewayEvent {
+  event: string;
+  payload?: JsonValue;
+  seq?: number;
+  stateVersion?: number;
+}
 
 interface WebSocketLike {
   addEventListener(type: "open", listener: () => void, options?: { once?: boolean }): void;
@@ -109,6 +118,14 @@ const DEFAULT_METHODS: RuntimeMethodDefinition[] = [
     paramsExample: { runId: "run_abc123" }
   },
   {
+    name: "agent.stream",
+    title: "Stream Agent Run",
+    description: "Start an OpenClaw agent request and forward Gateway events.",
+    capability: "agent",
+    risk: "write",
+    paramsExample: { prompt: "Summarize this workspace", sessionKey: "uab-demo" }
+  },
+  {
     name: "chat.history",
     title: "Chat History",
     description: "Read OpenClaw chat history.",
@@ -120,6 +137,14 @@ const DEFAULT_METHODS: RuntimeMethodDefinition[] = [
     name: "chat.send",
     title: "Chat Send",
     description: "Send a chat message through OpenClaw Gateway.",
+    capability: "chat",
+    risk: "write",
+    paramsExample: { sessionKey: "session-key", text: "Hello" }
+  },
+  {
+    name: "chat.stream",
+    title: "Chat Stream",
+    description: "Send a chat message and forward OpenClaw Gateway events.",
     capability: "chat",
     risk: "write",
     paramsExample: { sessionKey: "session-key", text: "Hello" }
@@ -179,6 +204,46 @@ const DEFAULT_METHODS: RuntimeMethodDefinition[] = [
     capability: "tools",
     risk: "write",
     paramsExample: { name: "tool_name", args: {}, sessionKey: "session-key" }
+  },
+  {
+    name: "artifacts.list",
+    title: "Artifacts",
+    description: "List OpenClaw artifacts.",
+    capability: "artifacts",
+    risk: "read",
+    paramsExample: { sessionKey: "session-key", limit: 50 }
+  },
+  {
+    name: "artifacts.get",
+    title: "Get Artifact",
+    description: "Read one OpenClaw artifact.",
+    capability: "artifacts",
+    risk: "read",
+    paramsExample: { artifactId: "artifact_abc123" }
+  },
+  {
+    name: "artifacts.delete",
+    title: "Delete Artifact",
+    description: "Delete one OpenClaw artifact.",
+    capability: "artifacts",
+    risk: "write",
+    paramsExample: { artifactId: "artifact_abc123" }
+  },
+  {
+    name: "exec.approval.list",
+    title: "Approvals",
+    description: "List pending OpenClaw execution approvals.",
+    capability: "approvals",
+    risk: "read",
+    paramsExample: { sessionKey: "session-key" }
+  },
+  {
+    name: "exec.approval.resolve",
+    title: "Resolve Approval",
+    description: "Approve or reject an OpenClaw execution approval.",
+    capability: "approvals",
+    risk: "write",
+    paramsExample: { approvalId: "approval_abc123", decision: "approve" }
   },
   {
     name: "skills.status",
@@ -262,14 +327,16 @@ const CAPABILITIES: RuntimeCapabilities = {
     write: true,
     methods: ["sessions.list", "sessions.patch", "sessions.usage"]
   },
-  agent: { read: true, write: true, methods: ["agent", "agent.wait"] },
+  agent: { read: true, write: true, methods: ["agent", "agent.wait", "agent.stream"] },
   chat: {
     read: true,
     write: true,
-    methods: ["chat.history", "chat.send", "chat.abort"]
+    methods: ["chat.history", "chat.send", "chat.stream", "chat.abort"]
   },
   tasks: { read: true, write: true, methods: ["tasks.list", "tasks.get", "tasks.cancel"] },
   tools: { read: true, write: true, methods: ["tools.catalog", "tools.effective", "tools.invoke"] },
+  artifacts: { read: true, write: true, methods: ["artifacts.list", "artifacts.get", "artifacts.delete"] },
+  approvals: { read: true, write: true, methods: ["exec.approval.list", "exec.approval.resolve"] },
   skills: { read: true, methods: ["skills.status", "skills.search"] },
   commands: { read: true, methods: ["commands.list"] },
   cron: { read: true, methods: ["cron.list"] },
@@ -323,8 +390,50 @@ export function createOpenClawAdapter(
       }
 
       return callOpenClaw(request.method, request.params ?? {}, options, timeoutMs);
+    },
+    stream(request) {
+      return streamOpenClaw(request, options, timeoutMs);
     }
   };
+}
+
+async function* streamOpenClaw(
+  request: AdapterCallRequest,
+  options: OpenClawAdapterOptions,
+  timeoutMs: number
+): AsyncIterable<AdapterStreamEvent> {
+  const method = mapOpenClawStreamMethod(request.method);
+
+  if (options.mode === "cli") {
+    const result = await callOpenClawCli(
+      method,
+      request.params ?? {},
+      options,
+      timeoutMs
+    );
+    yield {
+      type: "result",
+      data: toJsonValue(result)
+    };
+    return;
+  }
+
+  const queue = createAsyncQueue<AdapterStreamEvent>();
+  void callOpenClawGatewayWithEvents(method, request.params ?? {}, options, timeoutMs, (event) => {
+    queue.push(openClawEventToStreamEvent(event));
+  }).then((result) => {
+    queue.push({
+      type: "result",
+      data: toJsonValue(result.payload)
+    });
+    queue.end();
+  }, (error) => {
+    queue.fail(error);
+  });
+
+  for await (const event of queue) {
+    yield event;
+  }
 }
 
 async function callOpenClaw(
@@ -346,6 +455,17 @@ async function callOpenClawGateway(
   options: OpenClawAdapterOptions,
   timeoutMs: number
 ): Promise<unknown> {
+  const result = await callOpenClawGatewayWithEvents(method, params, options, timeoutMs);
+  return result.payload;
+}
+
+async function callOpenClawGatewayWithEvents(
+  method: string,
+  params: unknown,
+  options: OpenClawAdapterOptions,
+  timeoutMs: number,
+  onEvent?: (event: OpenClawGatewayEvent) => void
+): Promise<{ payload: unknown; events: OpenClawGatewayEvent[] }> {
   const WebSocketCtor = globalThis.WebSocket as unknown as WebSocketConstructor | undefined;
   if (!WebSocketCtor) {
     throw new AdapterError("OpenClaw Gateway mode requires a Node.js runtime with global WebSocket support.", {
@@ -361,6 +481,7 @@ async function callOpenClawGateway(
   let connected = false;
   let closed = false;
   let counter = 0;
+  const events: OpenClawGatewayEvent[] = [];
 
   const sendRequest = (requestMethod: string, requestParams: unknown) => {
     const id = `uab_${Date.now().toString(36)}_${counter++}`;
@@ -389,7 +510,21 @@ async function callOpenClawGateway(
 
   socket.addEventListener("message", (event) => {
     const frame = parseGatewayFrame(event.data);
-    if (!frame || frame.type !== "res") return;
+    if (!frame) return;
+
+    if (frame.type === "event") {
+      const gatewayEvent: OpenClawGatewayEvent = {
+        event: frame.event,
+        payload: toJsonValue(frame.payload),
+        seq: frame.seq,
+        stateVersion: frame.stateVersion
+      };
+      events.push(gatewayEvent);
+      onEvent?.(gatewayEvent);
+      return;
+    }
+
+    if (frame.type !== "res") return;
 
     const entry = pending.get(frame.id);
     if (!entry) return;
@@ -443,7 +578,10 @@ async function callOpenClawGateway(
       userAgent: "universal-agent-bridge/0.1.0"
     });
     connected = true;
-    return await sendRequest(method, params);
+    return {
+      payload: await sendRequest(method, params),
+      events
+    };
   } catch (error) {
     if (error instanceof AdapterError) throw error;
     throw new AdapterError(error instanceof Error ? error.message : String(error), {
@@ -542,6 +680,144 @@ function openClawFrameError(error: unknown): AdapterError {
   return new AdapterError("OpenClaw Gateway returned an error.", {
     code: BRIDGE_ERROR_CODES.adapterUnavailable
   });
+}
+
+function mapOpenClawStreamMethod(method: string): string {
+  if (method === "agent.stream") return "agent";
+  if (method === "chat.stream") return "chat.send";
+  return method;
+}
+
+function openClawEventToStreamEvent(event: OpenClawGatewayEvent): AdapterStreamEvent {
+  const name = event.event;
+  const payload = event.payload ?? null;
+  const lower = name.toLowerCase();
+  const text = extractOpenClawText(payload);
+
+  if (text) {
+    return {
+      type: "text",
+      delta: text
+    };
+  }
+
+  if (lower.includes("tool")) {
+    return {
+      type: "tool_call",
+      name: readPayloadString(payload, "name") ?? readPayloadString(payload, "toolName") ?? name,
+      data: payload
+    };
+  }
+
+  if (lower.includes("artifact")) {
+    return {
+      type: "artifact",
+      data: payload
+    };
+  }
+
+  if (lower.includes("approval")) {
+    return {
+      type: "custom",
+      name: "approval",
+      data: payload
+    };
+  }
+
+  if (lower.includes("error")) {
+    return {
+      type: "error",
+      message: readPayloadString(payload, "message") ?? "OpenClaw Gateway event error.",
+      data: payload
+    };
+  }
+
+  if (isJsonObject(payload) && (isJsonObject(payload.a2ui) || isJsonObject(payload.ui))) {
+    return {
+      type: "a2ui",
+      data: payload
+    };
+  }
+
+  return {
+    type: "custom",
+    name,
+    data: {
+      event: name,
+      seq: event.seq ?? null,
+      stateVersion: event.stateVersion ?? null,
+      payload
+    }
+  };
+}
+
+function extractOpenClawText(value: JsonValue): string | undefined {
+  if (typeof value === "string") return value;
+  if (!isJsonObject(value)) return undefined;
+
+  for (const key of ["delta", "text", "content", "message"]) {
+    const entry = value[key];
+    if (typeof entry === "string" && entry.length > 0) return entry;
+  }
+
+  return undefined;
+}
+
+function readPayloadString(value: JsonValue, key: string): string | undefined {
+  if (!isJsonObject(value)) return undefined;
+  const entry = value[key];
+  return typeof entry === "string" && entry.trim() !== "" ? entry.trim() : undefined;
+}
+
+function createAsyncQueue<T>(): AsyncIterable<T> & {
+  push(value: T): void;
+  end(): void;
+  fail(error: unknown): void;
+} {
+  const values: T[] = [];
+  const waiters: Array<{
+    resolve(result: IteratorResult<T>): void;
+    reject(error: unknown): void;
+  }> = [];
+  let done = false;
+  let failure: unknown;
+
+  return {
+    push(value: T) {
+      if (done) return;
+      const waiter = waiters.shift();
+      if (waiter) {
+        waiter.resolve({ value, done: false });
+      } else {
+        values.push(value);
+      }
+    },
+    end() {
+      done = true;
+      for (const waiter of waiters.splice(0)) {
+        waiter.resolve({ value: undefined, done: true });
+      }
+    },
+    fail(error: unknown) {
+      failure = error;
+      done = true;
+      for (const waiter of waiters.splice(0)) {
+        waiter.reject(error);
+      }
+    },
+    [Symbol.asyncIterator]() {
+      return {
+        next(): Promise<IteratorResult<T>> {
+          if (values.length > 0) {
+            return Promise.resolve({ value: values.shift()!, done: false });
+          }
+          if (failure) return Promise.reject(failure);
+          if (done) return Promise.resolve({ value: undefined, done: true });
+          return new Promise((resolve, reject) => waiters.push({ resolve, reject }));
+        }
+      };
+    }
+  };
 }
 
 function readObjectParams(params: unknown): JsonObject {

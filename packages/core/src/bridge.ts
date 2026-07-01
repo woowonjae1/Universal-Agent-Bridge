@@ -1,4 +1,6 @@
 import type {
+  AdapterCallRequest,
+  AdapterStreamEvent,
   AgentRuntimeAdapter,
   BridgeLogger,
   Principal,
@@ -128,6 +130,116 @@ export class AgentBridge {
       });
       this.recordAudit(request, traceId, startedAt, response, principal);
       return response;
+    }
+  }
+
+  async *streamCall(
+    request: BridgeRequest,
+    principal?: Principal
+  ): AsyncIterable<AdapterStreamEvent> {
+    const startedAt = Date.now();
+    const traceId = request.meta?.traceId ?? `trace_${Date.now().toString(36)}`;
+    const adapter = this.registry.get(request.runtime);
+    if (!adapter) {
+      const errorEvent: AdapterStreamEvent = {
+        type: "error",
+        message: `Runtime '${request.runtime}' is not registered.`,
+        code: BRIDGE_ERROR_CODES.runtimeNotFound
+      };
+      const response = createErrorResponse({
+        id: request.id,
+        code: Number(errorEvent.code),
+        message: errorEvent.message
+      });
+      this.recordAudit(request, traceId, startedAt, response, principal);
+      yield errorEvent;
+      return;
+    }
+
+    const access = await this.accessPolicy.authorize({
+      request,
+      adapter,
+      principal
+    });
+
+    if (!access.allow) {
+      const errorEvent: AdapterStreamEvent = {
+        type: "error",
+        message: access.reason ?? "Permission denied.",
+        code: BRIDGE_ERROR_CODES.permissionDenied
+      };
+      const response = createErrorResponse({
+        id: request.id,
+        code: Number(errorEvent.code),
+        message: errorEvent.message
+      });
+      this.recordAudit(request, traceId, startedAt, response, principal);
+      yield errorEvent;
+      return;
+    }
+
+    const callRequest: AdapterCallRequest = {
+      method: request.method,
+      params: request.params,
+      meta: request.meta,
+      raw: request
+    };
+    const context = {
+      requestId: request.id ?? null,
+      traceId,
+      principal,
+      logger: this.logger
+    };
+
+    try {
+      if (adapter.stream) {
+        let finalResult: JsonValue | undefined;
+        for await (const event of adapter.stream(callRequest, context)) {
+          if (event.type === "result") {
+            finalResult = event.data;
+          }
+          yield event;
+        }
+
+        const response = createSuccessResponse(request, finalResult ?? null);
+        this.recordAudit(request, traceId, startedAt, response, principal);
+        return;
+      }
+
+      const result = await adapter.call(callRequest, context);
+      const resultJson = toJsonValue(result);
+      const response = createSuccessResponse(request, resultJson);
+      this.recordAudit(request, traceId, startedAt, response, principal);
+      yield {
+        type: "result",
+        data: resultJson
+      };
+    } catch (error) {
+      const maybeError = error as {
+        code?: number;
+        message?: string;
+        data?: JsonValue;
+      };
+
+      this.logger?.error("Adapter stream failed.", {
+        runtime: request.runtime,
+        method: request.method,
+        error
+      });
+
+      const response = createErrorResponse({
+        id: request.id,
+        code: maybeError.code ?? BRIDGE_ERROR_CODES.internalError,
+        message: maybeError.message ?? "Adapter stream failed.",
+        data: maybeError.data
+      });
+      this.recordAudit(request, traceId, startedAt, response, principal);
+      yield {
+        type: "error",
+        message: maybeError.message ?? "Adapter stream failed.",
+        code: maybeError.code ?? BRIDGE_ERROR_CODES.internalError,
+        data: maybeError.data
+      };
     }
   }
 

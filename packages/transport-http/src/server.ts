@@ -1,5 +1,6 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import {
+  adapterStreamEventToAgUiEvents,
   createAgUiEvent,
   createBridgeRunEvents,
   encodeSseEvent,
@@ -178,6 +179,33 @@ async function sendAgUiRun(
     type: "STEP_STARTED",
     stepName: "bridge.call"
   }));
+
+  if (bridge.registry.get(descriptor.runtime)?.stream) {
+    writeSse(response, createAgUiEvent({
+      type: "TEXT_MESSAGE_START",
+      messageId: `msg_${descriptor.runId}`,
+      role: "assistant"
+    }));
+
+    let endedWithError = false;
+    for await (const streamEvent of bridge.streamCall(descriptor.request)) {
+      for (const agUiEvent of adapterStreamEventToAgUiEvents(streamEvent, descriptor)) {
+        if (agUiEvent.type === "RUN_ERROR") {
+          endedWithError = true;
+        }
+        writeSse(response, agUiEvent);
+      }
+    }
+
+    if (!endedWithError) {
+      writeSse(response, createAgUiEvent({
+        type: "TEXT_MESSAGE_END",
+        messageId: `msg_${descriptor.runId}`
+      }));
+    }
+    response.end();
+    return;
+  }
 
   const bridgeResponse = await bridge.handleRequest(descriptor.request);
   const [, , , , ...tailEvents] = createBridgeRunEvents(input, descriptor, bridgeResponse);

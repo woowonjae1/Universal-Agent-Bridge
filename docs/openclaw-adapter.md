@@ -25,6 +25,15 @@ uab call openclaw tasks.list "{\"limit\":20}"
 uab call openclaw gateway.call "{\"method\":\"tools.catalog\",\"params\":{}}"
 ```
 
+Stream a real OpenClaw chat turn through AG-UI:
+
+```powershell
+curl.exe -N -X POST http://127.0.0.1:8787/agui/runs `
+  -H "content-type: application/json" `
+  -H "accept: text/event-stream" `
+  -d "{\"threadId\":\"thread_openclaw\",\"runId\":\"run_openclaw_stream\",\"state\":{},\"messages\":[],\"tools\":[],\"context\":[],\"forwardedProps\":{\"uab\":{\"runtime\":\"openclaw\",\"method\":\"chat.stream\",\"params\":{\"sessionKey\":\"project-main\",\"text\":\"What changed?\"}}}}"
+```
+
 Set scopes explicitly when needed:
 
 ```powershell
@@ -58,9 +67,12 @@ The adapter advertises common OpenClaw Gateway method families:
 - `models.list`
 - `sessions.list`, `sessions.patch`, `sessions.usage`
 - `agent`, `agent.wait`
-- `chat.history`, `chat.send`, `chat.abort`
+- `agent.stream`
+- `chat.history`, `chat.send`, `chat.stream`, `chat.abort`
 - `tasks.list`, `tasks.get`, `tasks.cancel`
 - `tools.catalog`, `tools.effective`, `tools.invoke`
+- `artifacts.list`, `artifacts.get`, `artifacts.delete`
+- `exec.approval.list`, `exec.approval.resolve`
 - `skills.status`, `skills.search`
 - `commands.list`
 - `cron.list`
@@ -70,3 +82,15 @@ The adapter advertises common OpenClaw Gateway method families:
 - `gateway.call` for raw documented Gateway RPC calls
 
 The raw `gateway.call` method lets the dashboard invoke newly documented OpenClaw RPC methods before UAB adds a first-class convenience entry.
+
+## Streaming
+
+OpenClaw Gateway `event` frames are normalized into UAB stream events:
+
+- message deltas become AG-UI `TEXT_MESSAGE_CONTENT`
+- tool events become AG-UI `CUSTOM` with `tool.call`
+- artifact events become AG-UI `CUSTOM` with `artifact`
+- approval events become AG-UI `CUSTOM` with `approval`
+- A2UI payloads become AG-UI `CUSTOM` with `a2ui.envelope`
+
+CLI fallback still supports one-shot calls, but live event streaming requires Gateway mode.

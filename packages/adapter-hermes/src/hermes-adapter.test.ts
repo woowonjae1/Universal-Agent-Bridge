@@ -126,6 +126,120 @@ test("Hermes adapter does not inject model into runs.create", async () => {
   }
 });
 
+test("Hermes adapter streams session chat SSE events", async () => {
+  const server = createServer(async (request, response) => {
+    assert.equal(request.method, "POST");
+    assert.equal(request.url, "/api/sessions/session_1/chat/stream");
+    response.writeHead(200, {
+      "content-type": "text/event-stream"
+    });
+    response.write("event: message.delta\n");
+    response.write("data: {\"delta\":\"hello\"}\n\n");
+    response.write("event: tool.call\n");
+    response.write("data: {\"name\":\"search\",\"arguments\":{\"q\":\"uab\"}}\n\n");
+    response.write("event: artifact.created\n");
+    response.write("data: {\"artifact_id\":\"art_1\",\"title\":\"Plan\"}\n\n");
+    response.end("event: done\ndata: {\"done\":true}\n\n");
+  });
+
+  await listen(server);
+  const port = readPort(server);
+
+  try {
+    const adapter = createHermesAdapter({
+      baseUrl: `http://127.0.0.1:${port}`
+    });
+    const events = [];
+    for await (const event of adapter.stream!({
+      method: "sessions.chat.stream",
+      params: { id: "session_1", input: "hi" },
+      raw: {
+        jsonrpc: "2.0",
+        id: "req",
+        runtime: "hermes",
+        method: "sessions.chat.stream"
+      }
+    }, {
+      requestId: "req",
+      traceId: "trace"
+    })) {
+      events.push(event);
+    }
+
+    assert.deepEqual(events.map((event) => event.type), [
+      "step",
+      "text",
+      "tool_call",
+      "artifact",
+      "result",
+      "step"
+    ]);
+  } finally {
+    await close(server);
+  }
+});
+
+test("Hermes adapter maps artifacts and tool calls to real API paths", async () => {
+  const calls: Array<{ method: string; path: string }> = [];
+  const server = createServer((request, response) => {
+    calls.push({ method: request.method ?? "", path: request.url ?? "" });
+    response.setHeader("content-type", "application/json");
+    response.end(JSON.stringify({ ok: true }));
+  });
+
+  await listen(server);
+  const port = readPort(server);
+
+  try {
+    const adapter = createHermesAdapter({
+      baseUrl: `http://127.0.0.1:${port}`
+    });
+    const context = {
+      requestId: "req",
+      traceId: "trace"
+    };
+
+    await adapter.call({
+      method: "artifacts.list",
+      params: { session_id: "s1", limit: 10 },
+      raw: {
+        jsonrpc: "2.0",
+        id: "req",
+        runtime: "hermes",
+        method: "artifacts.list"
+      }
+    }, context);
+    await adapter.call({
+      method: "artifacts.get",
+      params: { artifact_id: "art_1" },
+      raw: {
+        jsonrpc: "2.0",
+        id: "req",
+        runtime: "hermes",
+        method: "artifacts.get"
+      }
+    }, context);
+    await adapter.call({
+      method: "toolcalls.list",
+      params: { run_id: "run_1" },
+      raw: {
+        jsonrpc: "2.0",
+        id: "req",
+        runtime: "hermes",
+        method: "toolcalls.list"
+      }
+    }, context);
+
+    assert.deepEqual(calls, [
+      { method: "GET", path: "/api/artifacts?session_id=s1&limit=10" },
+      { method: "GET", path: "/api/artifacts/art_1" },
+      { method: "GET", path: "/api/tool-calls?run_id=run_1" }
+    ]);
+  } finally {
+    await close(server);
+  }
+});
+
 function listen(server: ReturnType<typeof createServer>): Promise<void> {
   return new Promise((resolve, reject) => {
     server.once("error", reject);

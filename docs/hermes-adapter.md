@@ -13,6 +13,7 @@ The adapter uses the public API Server surface documented by Hermes:
 - `GET /v1/responses/{id}`
 - `POST /v1/runs`
 - `GET /v1/runs/{run_id}`
+- `GET /v1/runs/{run_id}/events`
 - `POST /v1/runs/{run_id}/stop`
 - `POST /v1/runs/{run_id}/approval`
 - `GET /api/sessions`
@@ -20,6 +21,11 @@ The adapter uses the public API Server surface documented by Hermes:
 - `GET /api/sessions/{id}`
 - `GET /api/sessions/{id}/messages`
 - `POST /api/sessions/{id}/chat`
+- `POST /api/sessions/{id}/chat/stream`
+- `GET /api/artifacts`
+- `GET /api/artifacts/{artifact_id}`
+- `GET /api/tool-calls`
+- `GET /api/tool-calls/{tool_call_id}`
 - `GET /v1/skills`
 - `GET /v1/toolsets`
 - `GET /api/jobs`
@@ -59,6 +65,15 @@ uab call hermes sessions.list "{\"limit\":10}"
 uab call hermes chat.completions.create "{\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}]}"
 ```
 
+Stream a real Hermes session turn through AG-UI:
+
+```powershell
+curl.exe -N -X POST http://127.0.0.1:8787/agui/runs `
+  -H "content-type: application/json" `
+  -H "accept: text/event-stream" `
+  -d "{\"threadId\":\"thread_hermes\",\"runId\":\"run_hermes_stream\",\"state\":{},\"messages\":[],\"tools\":[],\"context\":[],\"forwardedProps\":{\"uab\":{\"runtime\":\"hermes\",\"method\":\"sessions.chat.stream\",\"params\":{\"id\":\"session_id\",\"input\":\"What changed?\"}}}}"
+```
+
 ## Method Mapping
 
 | UAB method | Hermes endpoint |
@@ -69,10 +84,26 @@ uab call hermes chat.completions.create "{\"messages\":[{\"role\":\"user\",\"con
 | `chat.completions.create` | `POST /v1/chat/completions` |
 | `responses.create` | `POST /v1/responses` |
 | `runs.create` | `POST /v1/runs` |
+| `runs.events` | `GET /v1/runs/{run_id}/events` |
 | `sessions.list` | `GET /api/sessions` |
 | `sessions.chat` | `POST /api/sessions/{id}/chat` |
+| `sessions.chat.stream` | `POST /api/sessions/{id}/chat/stream` |
+| `artifacts.list` | `GET /api/artifacts` |
+| `artifacts.get` | `GET /api/artifacts/{artifact_id}` |
+| `toolcalls.list` | `GET /api/tool-calls` |
+| `toolcalls.get` | `GET /api/tool-calls/{tool_call_id}` |
 | `skills.listInstalled` | `GET /v1/skills` |
 | `toolsets.list` | `GET /v1/toolsets` |
 | `jobs.list` | `GET /api/jobs` |
 
 Bearer auth is sent as `Authorization: Bearer <UAB_HERMES_TOKEN>`.
+
+## Streaming
+
+Hermes SSE messages are normalized into UAB stream events:
+
+- text deltas become AG-UI `TEXT_MESSAGE_CONTENT`
+- tool events become AG-UI `CUSTOM` with `tool.call`
+- artifact events become AG-UI `CUSTOM` with `artifact`
+- A2UI payloads become AG-UI `CUSTOM` with `a2ui.envelope`
+- final events close the AG-UI run with `RUN_FINISHED`

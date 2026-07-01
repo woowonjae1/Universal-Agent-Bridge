@@ -196,7 +196,7 @@ docs/
 ## Roadmap
 
 - Add MQTT transport as the first remote-first transport.
-- Expand OpenClaw and Hermes adapters with native streaming event support.
+- Expand OpenClaw and Hermes adapters with more native method coverage and conformance tests.
 - Expand MCP support with resources, prompts, roots, and sampling.
 - Expose UAB itself as an A2A server with an Agent Card.
 - Expand A2UI dynamic UI with form submission, richer layouts, and chart primitives.

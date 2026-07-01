@@ -3,6 +3,7 @@ import {
   createA2uiAgUiCustomValue,
   extractA2uiEnvelope
 } from "@uab/a2ui";
+import type { AdapterStreamEvent } from "@uab/adapter-sdk";
 import type { BridgeRequest, BridgeResponse, JsonObject, JsonValue } from "@uab/protocol";
 import { isJsonObject } from "@uab/protocol";
 
@@ -288,6 +289,133 @@ export function createBridgeRunEvents(
 
 export function encodeSseEvent(event: AgUiEvent): string {
   return `data: ${JSON.stringify(event)}\n\n`;
+}
+
+export function adapterStreamEventToAgUiEvents(
+  event: AdapterStreamEvent,
+  descriptor: BridgeRunDescriptor
+): AgUiEvent[] {
+  const messageId = `msg_${descriptor.runId}`;
+
+  switch (event.type) {
+    case "start":
+      return event.name
+        ? [
+            createAgUiEvent({
+              type: "STEP_STARTED",
+              stepName: event.name
+            })
+          ]
+        : [];
+    case "state":
+      return [
+        createAgUiEvent({
+          type: "STATE_SNAPSHOT",
+          snapshot: event.data
+        })
+      ];
+    case "step":
+      return [
+        createAgUiEvent({
+          type: event.status === "started" ? "STEP_STARTED" : "STEP_FINISHED",
+          stepName: event.name
+        })
+      ];
+    case "text":
+      return [
+        createAgUiEvent({
+          type: "TEXT_MESSAGE_CONTENT",
+          messageId: event.messageId ?? messageId,
+          delta: event.delta
+        })
+      ];
+    case "tool_call":
+      return [
+        createAgUiEvent({
+          type: "CUSTOM",
+          name: "tool.call",
+          value: {
+            name: event.name,
+            data: event.data
+          }
+        })
+      ];
+    case "artifact":
+      return [
+        createAgUiEvent({
+          type: "CUSTOM",
+          name: "artifact",
+          value: event.data
+        })
+      ];
+    case "a2ui": {
+      const envelope = extractA2uiEnvelope(event.data);
+      return envelope
+        ? [
+            createAgUiEvent({
+              type: "CUSTOM",
+              name: A2UI_EVENT_NAME,
+              value: createA2uiAgUiCustomValue(envelope)
+            })
+          ]
+        : [
+            createAgUiEvent({
+              type: "CUSTOM",
+              name: A2UI_EVENT_NAME,
+              value: event.data
+            })
+          ];
+    }
+    case "custom":
+      return [
+        createAgUiEvent({
+          type: "CUSTOM",
+          name: event.name,
+          value: event.data ?? null
+        })
+      ];
+    case "result":
+      return [
+        createAgUiEvent({
+          type: "CUSTOM",
+          name: "uab.response",
+          value: {
+            jsonrpc: "2.0",
+            id: descriptor.request.id,
+            result: event.data
+          }
+        }),
+        ...a2uiResultEvents(event.data),
+        createAgUiEvent({
+          type: "RUN_FINISHED",
+          threadId: descriptor.threadId,
+          runId: descriptor.runId,
+          result: event.data
+        })
+      ];
+    case "error":
+      return [
+        createAgUiEvent({
+          type: "RUN_ERROR",
+          message: event.message,
+          code: event.code === undefined ? undefined : String(event.code)
+        })
+      ];
+    default:
+      return [];
+  }
+}
+
+function a2uiResultEvents(value: JsonValue): AgUiEvent[] {
+  const a2uiEnvelope = extractA2uiEnvelope(value);
+  if (!a2uiEnvelope) return [];
+  return [
+    createAgUiEvent({
+      type: "CUSTOM",
+      name: A2UI_EVENT_NAME,
+      value: createA2uiAgUiCustomValue(a2uiEnvelope)
+    })
+  ];
 }
 
 function readForwardedUabProps(value: unknown): {
