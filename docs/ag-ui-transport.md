@@ -58,12 +58,32 @@ The first implementation wraps any bridge RPC call into a standard event sequenc
 4. `STEP_STARTED`
 5. `STEP_FINISHED`
 6. `CUSTOM` with `uab.response`
-7. `TEXT_MESSAGE_START`
-8. `TEXT_MESSAGE_CONTENT`
-9. `TEXT_MESSAGE_END`
-10. `RUN_FINISHED`
+7. optional `CUSTOM` with `a2ui.envelope` when the bridge result contains an A2UI envelope
+8. `TEXT_MESSAGE_START`
+9. `TEXT_MESSAGE_CONTENT`
+10. `TEXT_MESSAGE_END`
+11. `RUN_FINISHED`
 
 Errors emit `RUN_ERROR`.
+
+## A2UI Payloads
+
+If an adapter result contains `a2ui` or `ui`, UAB validates the envelope through `@uab/a2ui` and emits it as:
+
+```json
+{
+  "type": "CUSTOM",
+  "name": "a2ui.envelope",
+  "value": {
+    "version": "1.0",
+    "type": "createSurface",
+    "surfaceId": "agent-review",
+    "components": []
+  }
+}
+```
+
+Clients should render this as declarative data. They should not execute code, inline scripts, or arbitrary HTML from agent output.
 
 ## Why This Layer Exists
 

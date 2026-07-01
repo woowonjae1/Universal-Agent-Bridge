@@ -25,6 +25,7 @@ OpenClaw Adapter | Hermes Adapter | Mock Adapter | Custom Adapter
 This repository starts with a working v0.1 foundation:
 
 - `@uab/protocol`: JSON-RPC style bridge envelope, responses, and error codes.
+- `@uab/a2ui`: A2UI dynamic UI envelope validation and sanitization.
 - `@uab/ag-ui`: AG-UI event mapping for frontend and app clients.
 - `@uab/mcp`: MCP server registry and tool invocation layer.
 - `@uab/a2a`: A2A remote agent registry and JSON-RPC client layer.
@@ -114,6 +115,15 @@ curl -N -X POST http://127.0.0.1:8787/agui/runs ^
   -d "{\"threadId\":\"thread_mock\",\"runId\":\"run_demo\",\"state\":{},\"messages\":[],\"tools\":[],\"context\":[],\"forwardedProps\":{\"uab\":{\"runtime\":\"mock\",\"method\":\"sessions.list\",\"params\":{}}}}"
 ```
 
+Render a dynamic A2UI surface through AG-UI:
+
+```bash
+curl -N -X POST http://127.0.0.1:8787/agui/runs ^
+  -H "content-type: application/json" ^
+  -H "accept: text/event-stream" ^
+  -d "{\"threadId\":\"thread_mock\",\"runId\":\"run_a2ui\",\"state\":{},\"messages\":[],\"tools\":[],\"context\":[],\"forwardedProps\":{\"uab\":{\"runtime\":\"mock\",\"method\":\"ui.surface.demo\",\"params\":{\"title\":\"Agent handoff\",\"status\":\"ready\"}}}}"
+```
+
 Register an MCP stdio tool server:
 
 ```bash
@@ -165,6 +175,7 @@ curl -X POST http://127.0.0.1:8787/rpc ^
 ```text
 packages/
   protocol/
+  a2ui/
   ag-ui/
   mcp/
   a2a/
@@ -188,6 +199,6 @@ docs/
 - Expand OpenClaw and Hermes adapters with native streaming event support.
 - Expand MCP support with resources, prompts, roots, and sampling.
 - Expose UAB itself as an A2A server with an Agent Card.
-- Add A2UI-style dynamic UI payload rendering.
+- Expand A2UI dynamic UI with form submission, richer layouts, and chart primitives.
 - Add adapter conformance tests for more real-agent method families.
 - Add token-based auth, pairing flows, and persistent audit logs.

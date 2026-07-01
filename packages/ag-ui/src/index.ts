@@ -1,3 +1,8 @@
+import {
+  A2UI_EVENT_NAME,
+  createA2uiAgUiCustomValue,
+  extractA2uiEnvelope
+} from "@uab/a2ui";
 import type { BridgeRequest, BridgeResponse, JsonObject, JsonValue } from "@uab/protocol";
 import { isJsonObject } from "@uab/protocol";
 
@@ -241,7 +246,21 @@ export function createBridgeRunEvents(
       type: "CUSTOM",
       name: "uab.response",
       value: response
-    }),
+    })
+  );
+
+  const a2uiEnvelope = extractA2uiEnvelope(response.result);
+  if (a2uiEnvelope) {
+    events.push(
+      createAgUiEvent({
+        type: "CUSTOM",
+        name: A2UI_EVENT_NAME,
+        value: createA2uiAgUiCustomValue(a2uiEnvelope)
+      })
+    );
+  }
+
+  events.push(
     createAgUiEvent({
       type: "TEXT_MESSAGE_START",
       messageId,

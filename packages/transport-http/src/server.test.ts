@@ -28,6 +28,34 @@ const adapter: AgentRuntimeAdapter = {
   }
 };
 
+const a2uiAdapter: AgentRuntimeAdapter = {
+  info: {
+    id: "a2ui-test",
+    name: "A2UI Test Runtime"
+  },
+  capabilities() {
+    return {
+      ui: { read: true, write: true }
+    };
+  },
+  call() {
+    return {
+      output: "Created surface.",
+      a2ui: {
+        version: "1.0",
+        type: "createSurface",
+        surfaceId: "surface_test",
+        components: [
+          {
+            type: "text",
+            text: "hello"
+          }
+        ]
+      }
+    };
+  }
+};
+
 test("HTTP transport streams bridge calls as AG-UI SSE events", async () => {
   const bridge = new AgentBridge({
     adapters: [adapter]
@@ -83,6 +111,56 @@ test("HTTP transport streams bridge calls as AG-UI SSE events", async () => {
       "TEXT_MESSAGE_END",
       "RUN_FINISHED"
     ]);
+  } finally {
+    await close(server);
+  }
+});
+
+test("HTTP transport forwards A2UI envelopes through AG-UI custom events", async () => {
+  const bridge = new AgentBridge({
+    adapters: [a2uiAdapter]
+  });
+  const server = createHttpBridgeServer({ bridge });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+
+  try {
+    const port = readPort(server);
+
+    const response = await fetch(`http://127.0.0.1:${port}/agui/runs`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        accept: "text/event-stream"
+      },
+      body: JSON.stringify({
+        threadId: "thread_a2ui",
+        runId: "run_a2ui",
+        state: {},
+        messages: [],
+        tools: [],
+        context: [],
+        forwardedProps: {
+          uab: {
+            runtime: "a2ui-test",
+            method: "ui.surface.demo",
+            params: {}
+          }
+        }
+      })
+    });
+
+    assert.equal(response.status, 200);
+
+    const body = await response.text();
+    const events = body
+      .split("\n\n")
+      .filter(Boolean)
+      .map((chunk) => JSON.parse(chunk.replace(/^data: /, "")) as { type: string; name?: string; value?: unknown });
+
+    const a2uiEvent = events.find((event) => event.type === "CUSTOM" && event.name === "a2ui.envelope");
+    assert.equal(Boolean(a2uiEvent), true);
+    assert.equal((a2uiEvent?.value as { surfaceId?: string }).surfaceId, "surface_test");
   } finally {
     await close(server);
   }

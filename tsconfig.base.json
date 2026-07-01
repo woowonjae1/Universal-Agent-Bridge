@@ -15,6 +15,7 @@
     "baseUrl": ".",
     "paths": {
       "@uab/protocol": ["packages/protocol/src/index.ts"],
+      "@uab/a2ui": ["packages/a2ui/src/index.ts"],
       "@uab/ag-ui": ["packages/ag-ui/src/index.ts"],
       "@uab/mcp": ["packages/mcp/src/index.ts"],
       "@uab/a2a": ["packages/a2a/src/index.ts"],

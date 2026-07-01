@@ -113,6 +113,84 @@ interface AgUiEvent {
   [key: string]: unknown;
 }
 
+type A2uiEnvelopeType =
+  | "createSurface"
+  | "updateComponents"
+  | "updateDataModel"
+  | "deleteSurface"
+  | "actionResponse"
+  | "callFunction";
+
+interface A2uiAction {
+  type: "submit" | "callFunction" | "rpc" | "link";
+  name?: string;
+  label?: string;
+  params?: Record<string, unknown>;
+}
+
+interface A2uiComponent {
+  id?: string;
+  type: string;
+  title?: string;
+  text?: string;
+  label?: string;
+  name?: string;
+  value?: unknown;
+  placeholder?: string;
+  variant?: "primary" | "secondary" | "danger" | "ghost";
+  columns?: string[];
+  rows?: Record<string, unknown>[];
+  items?: unknown[];
+  children?: A2uiComponent[];
+  action?: A2uiAction;
+  props?: Record<string, unknown>;
+}
+
+interface A2uiEnvelope {
+  version: string;
+  type: A2uiEnvelopeType;
+  surfaceId: string;
+  components?: A2uiComponent[];
+  dataModel?: Record<string, unknown>;
+  actions?: A2uiAction[];
+  payload?: unknown;
+  meta?: Record<string, unknown>;
+}
+
+interface A2uiSurface {
+  id: string;
+  envelope: A2uiEnvelope;
+  components: A2uiComponent[];
+  dataModel: Record<string, unknown>;
+  updatedAt: string;
+  lastEvent: A2uiEnvelopeType;
+}
+
+const A2UI_EVENT_NAME = "a2ui.envelope";
+const A2UI_ENVELOPE_TYPES = new Set<string>([
+  "createSurface",
+  "updateComponents",
+  "updateDataModel",
+  "deleteSurface",
+  "actionResponse",
+  "callFunction"
+]);
+const A2UI_COMPONENT_TYPES = new Set<string>([
+  "surface",
+  "card",
+  "heading",
+  "text",
+  "button",
+  "input",
+  "form",
+  "list",
+  "table",
+  "stat",
+  "row",
+  "column",
+  "divider"
+]);
+
 const defaultApiBase =
   localStorage.getItem("uab.apiBase") ?? "http://127.0.0.1:8787";
 
@@ -120,7 +198,8 @@ const sampleParams: Record<string, string> = {
   "system.ping": JSON.stringify({ message: "hello" }, null, 2),
   "sessions.get": JSON.stringify({ id: "session_demo" }, null, 2),
   "sessions.create": JSON.stringify({ title: "New session" }, null, 2),
-  "models.set": JSON.stringify({ model: "mock-balanced" }, null, 2)
+  "models.set": JSON.stringify({ model: "mock-balanced" }, null, 2),
+  "ui.surface.demo": JSON.stringify({ title: "Agent handoff", status: "ready" }, null, 2)
 };
 
 export function App() {
@@ -138,6 +217,7 @@ export function App() {
   const [methods, setMethods] = useState<MethodDefinition[]>([]);
   const [agUiEvents, setAgUiEvents] = useState<AgUiEvent[]>([]);
   const [agUiText, setAgUiText] = useState("");
+  const [a2uiSurfaces, setA2uiSurfaces] = useState<A2uiSurface[]>([]);
   const [streaming, setStreaming] = useState(false);
 
   const selected = useMemo(
@@ -266,6 +346,7 @@ export function App() {
     setStreaming(true);
     setAgUiEvents([]);
     setAgUiText("");
+    setA2uiSurfaces([]);
     const runId = `run_${Date.now().toString(36)}`;
 
     try {
@@ -293,6 +374,12 @@ export function App() {
         setAgUiEvents((current) => [...current, event].slice(-40));
         if (event.type === "TEXT_MESSAGE_CONTENT" && typeof event.delta === "string") {
           setAgUiText((current) => `${current}${event.delta}`);
+        }
+        if (event.type === "CUSTOM" && event.name === A2UI_EVENT_NAME) {
+          const envelope = readA2uiEnvelope(event.value);
+          if (envelope) {
+            applyA2uiEnvelope(envelope);
+          }
         }
       });
 
@@ -337,6 +424,20 @@ export function App() {
       },
       ...current
     ].slice(0, 18));
+  }
+
+  function applyA2uiEnvelope(envelope: A2uiEnvelope) {
+    setA2uiSurfaces((current) => reduceA2uiSurfaces(current, envelope));
+    pushLog("info", "A2UI surface updated", `${envelope.type}:${envelope.surfaceId}`);
+  }
+
+  function handleA2uiAction(surface: A2uiSurface, action?: A2uiAction) {
+    if (!action) return;
+    pushLog(
+      "info",
+      "A2UI action captured",
+      `${surface.id}.${action.name ?? action.type}`
+    );
   }
 
   const capabilityEntries = selected
@@ -544,6 +645,25 @@ export function App() {
                   )}
                 </div>
               </div>
+
+              <div className="a2ui-panel">
+                <div className="event-head">
+                  <strong>Dynamic UI</strong>
+                  <span>{a2uiSurfaces.length}</span>
+                </div>
+                <div className="a2ui-surface-list">
+                  {a2uiSurfaces.map((surface) => (
+                    <A2uiSurfaceView
+                      key={surface.id}
+                      surface={surface}
+                      onAction={handleA2uiAction}
+                    />
+                  ))}
+                  {a2uiSurfaces.length === 0 && (
+                    <div className="empty-state compact-empty">No A2UI surface</div>
+                  )}
+                </div>
+              </div>
             </section>
           </div>
         </section>
@@ -625,6 +745,310 @@ function renderCapabilityModes(value: CapabilityValue) {
 
 function Badge(props: { tone: string; children: React.ReactNode }) {
   return <span className={`badge ${props.tone}`}>{props.children}</span>;
+}
+
+function A2uiSurfaceView(props: {
+  surface: A2uiSurface;
+  onAction: (surface: A2uiSurface, action?: A2uiAction) => void;
+}) {
+  const { surface } = props;
+  const title = readSurfaceTitle(surface);
+
+  return (
+    <section className="a2ui-surface">
+      <div className="a2ui-surface-head">
+        <div>
+          <strong>{title}</strong>
+          <small>{surface.id} / {surface.lastEvent}</small>
+        </div>
+        <Badge tone="write">{surface.envelope.version}</Badge>
+      </div>
+      <div className="a2ui-components">
+        {surface.components.map((component, index) => (
+          <A2uiComponentView
+            key={component.id ?? `${component.type}_${index}`}
+            component={component}
+            surface={surface}
+            onAction={props.onAction}
+          />
+        ))}
+        {surface.components.length === 0 && (
+          <pre className="a2ui-data">{JSON.stringify(surface.dataModel, null, 2)}</pre>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function A2uiComponentView(props: {
+  component: A2uiComponent;
+  surface: A2uiSurface;
+  onAction: (surface: A2uiSurface, action?: A2uiAction) => void;
+}) {
+  const { component, surface, onAction } = props;
+
+  switch (component.type) {
+    case "surface":
+    case "card":
+      return (
+        <section className={`a2ui-component ${component.type}`}>
+          {component.title && <strong className="a2ui-title">{component.title}</strong>}
+          {component.text && <p className="a2ui-text">{component.text}</p>}
+          {component.children && (
+            <div className="a2ui-children">
+              {component.children.map((child, index) => (
+                <A2uiComponentView
+                  key={child.id ?? `${child.type}_${index}`}
+                  component={child}
+                  surface={surface}
+                  onAction={onAction}
+                />
+              ))}
+            </div>
+          )}
+        </section>
+      );
+    case "heading":
+      return <h3 className="a2ui-heading">{component.text ?? component.title ?? ""}</h3>;
+    case "text":
+      return <p className="a2ui-text">{component.text ?? stringifyA2uiValue(component.value ?? "")}</p>;
+    case "stat":
+      return (
+        <div className="a2ui-stat">
+          <small>{component.label ?? component.title ?? "Value"}</small>
+          <strong>{stringifyA2uiValue(component.value ?? component.text ?? "")}</strong>
+        </div>
+      );
+    case "list":
+      return (
+        <section className="a2ui-component">
+          {component.title && <strong className="a2ui-title">{component.title}</strong>}
+          <ul className="a2ui-list">
+            {(component.items ?? []).map((item, index) => (
+              <li key={index}>{stringifyA2uiValue(item)}</li>
+            ))}
+          </ul>
+        </section>
+      );
+    case "table":
+      return <A2uiTable component={component} />;
+    case "input":
+      return (
+        <label className="a2ui-input">
+          <span>{component.label ?? component.name ?? "Input"}</span>
+          <input
+            defaultValue={stringifyA2uiValue(component.value ?? "")}
+            placeholder={component.placeholder}
+          />
+        </label>
+      );
+    case "button":
+      return (
+        <button
+          className={`a2ui-button ${component.variant ?? "secondary"}`}
+          onClick={() => onAction(surface, component.action)}
+        >
+          {component.label ?? component.text ?? component.action?.label ?? "Action"}
+        </button>
+      );
+    case "form":
+    case "row":
+    case "column":
+      return (
+        <div className={`a2ui-group ${component.type}`}>
+          {component.title && <strong className="a2ui-title">{component.title}</strong>}
+          {(component.children ?? []).map((child, index) => (
+            <A2uiComponentView
+              key={child.id ?? `${child.type}_${index}`}
+              component={child}
+              surface={surface}
+              onAction={onAction}
+            />
+          ))}
+        </div>
+      );
+    case "divider":
+      return <hr className="a2ui-divider" />;
+    default:
+      return null;
+  }
+}
+
+function A2uiTable(props: { component: A2uiComponent }) {
+  const columns = props.component.columns ?? [];
+  const rows = props.component.rows ?? [];
+
+  if (columns.length === 0 || rows.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="a2ui-table-wrap">
+      {props.component.title && <strong className="a2ui-title">{props.component.title}</strong>}
+      <table className="a2ui-table">
+        <thead>
+          <tr>
+            {columns.map((column) => (
+              <th key={column}>{column}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, index) => (
+            <tr key={index}>
+              {columns.map((column) => (
+                <td key={column}>{stringifyA2uiValue(row[column])}</td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function readA2uiEnvelope(value: unknown): A2uiEnvelope | undefined {
+  if (!isRecord(value)) return undefined;
+  if (typeof value.version !== "string") return undefined;
+  if (!isA2uiEnvelopeType(value.type)) return undefined;
+  if (typeof value.surfaceId !== "string" || value.surfaceId.trim() === "") return undefined;
+
+  return {
+    version: value.version,
+    type: value.type,
+    surfaceId: value.surfaceId.trim(),
+    components: readA2uiComponents(value.components),
+    dataModel: isRecord(value.dataModel) ? value.dataModel : undefined,
+    actions: readA2uiActions(value.actions),
+    payload: value.payload,
+    meta: isRecord(value.meta) ? value.meta : undefined
+  };
+}
+
+function reduceA2uiSurfaces(current: A2uiSurface[], envelope: A2uiEnvelope): A2uiSurface[] {
+  if (envelope.type === "deleteSurface") {
+    return current.filter((surface) => surface.id !== envelope.surfaceId);
+  }
+
+  const now = new Date().toLocaleTimeString();
+  const existing = current.find((surface) => surface.id === envelope.surfaceId);
+  const dataModel = {
+    ...(existing?.dataModel ?? {}),
+    ...(envelope.dataModel ?? {})
+  };
+  const components = envelope.components ?? existing?.components ?? [];
+  const nextSurface: A2uiSurface = {
+    id: envelope.surfaceId,
+    envelope: {
+      ...envelope,
+      components,
+      dataModel
+    },
+    components,
+    dataModel,
+    updatedAt: now,
+    lastEvent: envelope.type
+  };
+
+  if (!existing) return [nextSurface, ...current].slice(0, 8);
+
+  return current.map((surface) => (
+    surface.id === envelope.surfaceId ? nextSurface : surface
+  ));
+}
+
+function readA2uiComponents(value: unknown): A2uiComponent[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value
+    .map((entry) => readA2uiComponent(entry))
+    .filter((entry): entry is A2uiComponent => Boolean(entry));
+}
+
+function readA2uiComponent(value: unknown): A2uiComponent | undefined {
+  if (!isRecord(value) || typeof value.type !== "string") return undefined;
+  if (!A2UI_COMPONENT_TYPES.has(value.type)) return undefined;
+
+  return {
+    id: readOptionalString(value.id),
+    type: value.type,
+    title: readOptionalString(value.title),
+    text: readOptionalString(value.text),
+    label: readOptionalString(value.label),
+    name: readOptionalString(value.name),
+    value: value.value,
+    placeholder: readOptionalString(value.placeholder),
+    variant: readA2uiVariant(value.variant),
+    columns: Array.isArray(value.columns)
+      ? value.columns.filter((entry): entry is string => typeof entry === "string")
+      : undefined,
+    rows: Array.isArray(value.rows) ? value.rows.filter(isRecord) : undefined,
+    items: Array.isArray(value.items) ? value.items : undefined,
+    children: readA2uiComponents(value.children),
+    action: readA2uiAction(value.action),
+    props: isRecord(value.props) ? value.props : undefined
+  };
+}
+
+function readA2uiActions(value: unknown): A2uiAction[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value
+    .map((entry) => readA2uiAction(entry))
+    .filter((entry): entry is A2uiAction => Boolean(entry));
+}
+
+function readA2uiAction(value: unknown): A2uiAction | undefined {
+  if (!isRecord(value)) return undefined;
+  if (
+    value.type !== "submit" &&
+    value.type !== "callFunction" &&
+    value.type !== "rpc" &&
+    value.type !== "link"
+  ) {
+    return undefined;
+  }
+
+  return {
+    type: value.type,
+    name: readOptionalString(value.name),
+    label: readOptionalString(value.label),
+    params: isRecord(value.params) ? value.params : undefined
+  };
+}
+
+function readA2uiVariant(value: unknown): A2uiComponent["variant"] {
+  if (
+    value === "primary" ||
+    value === "secondary" ||
+    value === "danger" ||
+    value === "ghost"
+  ) {
+    return value;
+  }
+  return undefined;
+}
+
+function readSurfaceTitle(surface: A2uiSurface): string {
+  const firstTitled = surface.components.find((component) => component.title || component.text);
+  return firstTitled?.title ?? firstTitled?.text ?? surface.id;
+}
+
+function stringifyA2uiValue(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  return JSON.stringify(value);
+}
+
+function isA2uiEnvelopeType(value: unknown): value is A2uiEnvelopeType {
+  return typeof value === "string" && A2UI_ENVELOPE_TYPES.has(value);
+}
+
+function readOptionalString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {

@@ -2,6 +2,7 @@
   "files": [],
   "references": [
     { "path": "./packages/protocol" },
+    { "path": "./packages/a2ui" },
     { "path": "./packages/ag-ui" },
     { "path": "./packages/mcp" },
     { "path": "./packages/a2a" },

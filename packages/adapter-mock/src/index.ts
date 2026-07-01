@@ -41,7 +41,8 @@ export function createMockAdapter(options: MockAdapterOptions = {}): AgentRuntim
     memory: { read: true },
     artifacts: { read: true },
     skills: { read: true },
-    cron: { read: true }
+    cron: { read: true },
+    ui: { read: true, write: true }
   };
   const methods: RuntimeMethodDefinition[] = [
     {
@@ -139,6 +140,17 @@ export function createMockAdapter(options: MockAdapterOptions = {}): AgentRuntim
       capability: "cron",
       risk: "read",
       paramsExample: {}
+    },
+    {
+      name: "ui.surface.demo",
+      title: "Render demo dynamic UI",
+      description: "Return an A2UI createSurface envelope for dashboard and client testing.",
+      capability: "ui",
+      risk: "write",
+      paramsExample: {
+        title: "Agent handoff",
+        status: "ready"
+      }
     }
   ];
 
@@ -238,6 +250,76 @@ export function createMockAdapter(options: MockAdapterOptions = {}): AgentRuntim
           return {
             jobs: []
           };
+        case "ui.surface.demo": {
+          const title = readStringParam(request.params, "title", "Agent handoff");
+          const status = readStringParam(request.params, "status", "ready");
+          return {
+            output: `Rendered dynamic UI surface '${title}'.`,
+            a2ui: {
+              version: "1.0",
+              type: "createSurface",
+              surfaceId: "mock-agent-surface",
+              dataModel: {
+                title,
+                status,
+                runtime: runtimeId,
+                activeModel: currentModel
+              },
+              components: [
+                {
+                  id: "summary",
+                  type: "card",
+                  title,
+                  children: [
+                    {
+                      type: "heading",
+                      text: "Agent bridge surface"
+                    },
+                    {
+                      type: "text",
+                      text: "This UI was returned by an agent adapter and delivered through AG-UI as an A2UI envelope."
+                    },
+                    {
+                      type: "stat",
+                      label: "Status",
+                      value: status
+                    }
+                  ]
+                },
+                {
+                  id: "handoff-items",
+                  type: "list",
+                  title: "Next actions",
+                  items: [
+                    "Inspect runtime capabilities",
+                    "Call an MCP tool",
+                    "Route work to an A2A agent"
+                  ]
+                },
+                {
+                  id: "agent-note",
+                  type: "input",
+                  label: "Operator note",
+                  name: "note",
+                  placeholder: "Add a note before calling the next action"
+                },
+                {
+                  id: "continue",
+                  type: "button",
+                  label: "Continue",
+                  variant: "primary",
+                  action: {
+                    type: "callFunction",
+                    name: "mock.continue",
+                    params: {
+                      surfaceId: "mock-agent-surface"
+                    }
+                  }
+                }
+              ]
+            }
+          };
+        }
         default:
           throw new AdapterError(`Method '${request.method}' is not supported by mock runtime.`, {
             code: BRIDGE_ERROR_CODES.methodNotFound,
