@@ -5,8 +5,10 @@
     { "path": "./packages/adapter-sdk" },
     { "path": "./packages/core" },
     { "path": "./packages/adapter-mock" },
+    { "path": "./packages/adapter-http-jsonrpc" },
+    { "path": "./packages/adapter-hermes" },
+    { "path": "./packages/adapter-openclaw" },
     { "path": "./packages/transport-http" },
     { "path": "./packages/cli" }
   ]
 }
-

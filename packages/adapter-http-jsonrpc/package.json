@@ -1,0 +1,20 @@
+{
+  "name": "@uab/adapter-http-jsonrpc",
+  "version": "0.1.0",
+  "description": "Generic HTTP JSON-RPC runtime adapter for Universal Agent Bridge.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "dependencies": {
+    "@uab/adapter-sdk": "file:../adapter-sdk",
+    "@uab/protocol": "file:../protocol"
+  }
+}
+

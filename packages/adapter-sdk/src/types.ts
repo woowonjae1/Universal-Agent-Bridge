@@ -12,6 +12,15 @@ export interface CapabilityDescriptor {
 
 export type RuntimeCapabilities = Record<string, CapabilityMode | CapabilityDescriptor>;
 
+export interface RuntimeMethodDefinition {
+  name: string;
+  title?: string;
+  description?: string;
+  capability?: string;
+  risk?: "read" | "write" | "admin";
+  paramsExample?: JsonValue;
+}
+
 export interface RuntimeInfo {
   id: string;
   name: string;
@@ -55,6 +64,7 @@ export interface AdapterHealth {
 export interface AgentRuntimeAdapter {
   info: RuntimeInfo;
   capabilities(): RuntimeCapabilities | Promise<RuntimeCapabilities>;
+  methods?(): RuntimeMethodDefinition[] | Promise<RuntimeMethodDefinition[]>;
   call(request: AdapterCallRequest, context: AdapterCallContext): unknown | Promise<unknown>;
   health?(): AdapterHealth | Promise<AdapterHealth>;
   start?(): void | Promise<void>;

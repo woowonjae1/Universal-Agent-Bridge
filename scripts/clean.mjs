@@ -12,8 +12,17 @@ const targets = [
   "packages/core/tsconfig.tsbuildinfo",
   "packages/adapter-mock/dist",
   "packages/adapter-mock/tsconfig.tsbuildinfo",
+  "packages/adapter-http-jsonrpc/dist",
+  "packages/adapter-http-jsonrpc/tsconfig.tsbuildinfo",
+  "packages/adapter-hermes/dist",
+  "packages/adapter-hermes/tsconfig.tsbuildinfo",
+  "packages/adapter-openclaw/dist",
+  "packages/adapter-openclaw/tsconfig.tsbuildinfo",
   "packages/transport-http/dist",
   "packages/transport-http/tsconfig.tsbuildinfo",
+  "apps/dashboard/dist",
+  "apps/dashboard/tsconfig.tsbuildinfo",
+  "apps/dashboard/tsconfig.node.tsbuildinfo",
   "packages/cli/dist",
   "packages/cli/tsconfig.tsbuildinfo"
 ];

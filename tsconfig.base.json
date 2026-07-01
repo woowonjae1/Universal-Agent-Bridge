@@ -18,8 +18,10 @@
       "@uab/adapter-sdk": ["packages/adapter-sdk/src/index.ts"],
       "@uab/core": ["packages/core/src/index.ts"],
       "@uab/adapter-mock": ["packages/adapter-mock/src/index.ts"],
+      "@uab/adapter-http-jsonrpc": ["packages/adapter-http-jsonrpc/src/index.ts"],
+      "@uab/adapter-hermes": ["packages/adapter-hermes/src/index.ts"],
+      "@uab/adapter-openclaw": ["packages/adapter-openclaw/src/index.ts"],
       "@uab/transport-http": ["packages/transport-http/src/index.ts"]
     }
   }
 }
-

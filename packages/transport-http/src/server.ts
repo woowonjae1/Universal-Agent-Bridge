@@ -9,6 +9,7 @@ export interface HttpBridgeServerOptions {
   bridge: AgentBridge;
   rpcPath?: string;
   maxBodyBytes?: number;
+  cors?: CorsOptions | false;
 }
 
 export interface ListenOptions {
@@ -16,21 +17,51 @@ export interface ListenOptions {
   port: number;
 }
 
+export interface CorsOptions {
+  origin?: string;
+  methods?: string[];
+  headers?: string[];
+}
+
 export function createHttpBridgeServer(options: HttpBridgeServerOptions): Server {
   const rpcPath = options.rpcPath ?? "/rpc";
   const maxBodyBytes = options.maxBodyBytes ?? 1024 * 1024;
+  const cors = options.cors === false ? false : options.cors ?? {};
 
   return createServer(async (request, response) => {
     try {
       const url = new URL(request.url ?? "/", "http://localhost");
+      writeCorsHeaders(response, cors);
+
+      if (request.method === "OPTIONS") {
+        response.statusCode = 204;
+        response.end();
+        return;
+      }
 
       if (request.method === "GET" && url.pathname === "/health") {
-        sendJson(response, 200, { status: "ok" });
+        sendJson(response, 200, {
+          status: "ok",
+          transport: "http"
+        });
         return;
       }
 
       if (request.method === "GET" && url.pathname === "/runtimes") {
         sendJson(response, 200, await options.bridge.listRuntimes());
+        return;
+      }
+
+      if (request.method === "GET" && url.pathname === "/methods") {
+        const runtime = url.searchParams.get("runtime") ?? undefined;
+        sendJson(response, 200, await options.bridge.listMethods(runtime));
+        return;
+      }
+
+      if (request.method === "GET" && url.pathname === "/audit") {
+        const limitParam = Number(url.searchParams.get("limit") ?? 50);
+        const limit = Number.isFinite(limitParam) ? limitParam : 50;
+        sendJson(response, 200, options.bridge.listAudit(limit));
         return;
       }
 
@@ -73,6 +104,20 @@ function sendJson(response: ServerResponse, statusCode: number, payload: unknown
   response.end(JSON.stringify(payload, null, 2));
 }
 
+function writeCorsHeaders(response: ServerResponse, cors: CorsOptions | false): void {
+  if (cors === false) return;
+
+  response.setHeader("access-control-allow-origin", cors.origin ?? "*");
+  response.setHeader(
+    "access-control-allow-methods",
+    (cors.methods ?? ["GET", "POST", "OPTIONS"]).join(", ")
+  );
+  response.setHeader(
+    "access-control-allow-headers",
+    (cors.headers ?? ["content-type", "authorization"]).join(", ")
+  );
+}
+
 async function readJsonBody(request: IncomingMessage, maxBodyBytes: number): Promise<unknown> {
   const chunks: Buffer[] = [];
   let totalBytes = 0;
@@ -93,4 +138,3 @@ async function readJsonBody(request: IncomingMessage, maxBodyBytes: number): Pro
 
   return JSON.parse(body);
 }
-

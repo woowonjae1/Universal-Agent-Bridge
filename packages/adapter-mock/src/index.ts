@@ -1,4 +1,9 @@
-import { AdapterError, type AgentRuntimeAdapter, type RuntimeCapabilities } from "@uab/adapter-sdk";
+import {
+  AdapterError,
+  type AgentRuntimeAdapter,
+  type RuntimeCapabilities,
+  type RuntimeMethodDefinition
+} from "@uab/adapter-sdk";
 import { BRIDGE_ERROR_CODES, isJsonObject } from "@uab/protocol";
 
 interface MockSession {
@@ -38,6 +43,104 @@ export function createMockAdapter(options: MockAdapterOptions = {}): AgentRuntim
     skills: { read: true },
     cron: { read: true }
   };
+  const methods: RuntimeMethodDefinition[] = [
+    {
+      name: "system.ping",
+      title: "Ping runtime",
+      description: "Check whether the runtime can receive and answer bridge calls.",
+      capability: "system",
+      risk: "read",
+      paramsExample: { message: "hello" }
+    },
+    {
+      name: "system.health",
+      title: "Runtime health",
+      description: "Return lightweight runtime health information.",
+      capability: "system",
+      risk: "read",
+      paramsExample: {}
+    },
+    {
+      name: "runtime.capabilities",
+      title: "List capabilities",
+      description: "Return the runtime capability descriptor.",
+      capability: "runtime",
+      risk: "read",
+      paramsExample: {}
+    },
+    {
+      name: "sessions.list",
+      title: "List sessions",
+      description: "List available sessions with compact metadata.",
+      capability: "sessions",
+      risk: "read",
+      paramsExample: {}
+    },
+    {
+      name: "sessions.get",
+      title: "Get session",
+      description: "Read one session with messages.",
+      capability: "sessions",
+      risk: "read",
+      paramsExample: { id: "session_demo" }
+    },
+    {
+      name: "sessions.create",
+      title: "Create session",
+      description: "Create a new in-memory mock session.",
+      capability: "sessions",
+      risk: "write",
+      paramsExample: { title: "New session" }
+    },
+    {
+      name: "models.list",
+      title: "List models",
+      description: "List mock model options and the currently selected model.",
+      capability: "models",
+      risk: "read",
+      paramsExample: {}
+    },
+    {
+      name: "models.set",
+      title: "Set model",
+      description: "Switch the active mock model.",
+      capability: "models",
+      risk: "write",
+      paramsExample: { model: "mock-balanced" }
+    },
+    {
+      name: "memory.listFiles",
+      title: "List memory files",
+      description: "List memory files known to the runtime.",
+      capability: "memory",
+      risk: "read",
+      paramsExample: {}
+    },
+    {
+      name: "artifacts.list",
+      title: "List artifacts",
+      description: "List runtime artifacts.",
+      capability: "artifacts",
+      risk: "read",
+      paramsExample: {}
+    },
+    {
+      name: "skills.listInstalled",
+      title: "List skills",
+      description: "List installed skills for the runtime.",
+      capability: "skills",
+      risk: "read",
+      paramsExample: {}
+    },
+    {
+      name: "cron.list",
+      title: "List cron jobs",
+      description: "List scheduled jobs exposed by the runtime.",
+      capability: "cron",
+      risk: "read",
+      paramsExample: {}
+    }
+  ];
 
   return {
     info: {
@@ -48,6 +151,9 @@ export function createMockAdapter(options: MockAdapterOptions = {}): AgentRuntim
     },
     capabilities() {
       return capabilities;
+    },
+    methods() {
+      return methods;
     },
     health() {
       return {
@@ -161,4 +267,3 @@ function readStringParam(params: unknown, key: string, fallback?: string): strin
     code: BRIDGE_ERROR_CODES.invalidParams
   });
 }
-

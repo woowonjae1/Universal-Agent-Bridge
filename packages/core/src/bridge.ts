@@ -1,7 +1,8 @@
 import type {
   AgentRuntimeAdapter,
   BridgeLogger,
-  Principal
+  Principal,
+  RuntimeMethodDefinition
 } from "@uab/adapter-sdk";
 import {
   BRIDGE_ERROR_CODES,
@@ -12,22 +13,26 @@ import {
 } from "@uab/protocol";
 import type { BridgeRequest, BridgeResponse, JsonValue } from "@uab/protocol";
 import { AdapterRegistry } from "./adapter-registry.js";
+import { AuditLog } from "./audit-log.js";
 import { AllowAllAccessPolicy, type AccessPolicy } from "./scope-policy.js";
 
 export interface AgentBridgeOptions {
   adapters?: AgentRuntimeAdapter[];
   accessPolicy?: AccessPolicy;
   logger?: BridgeLogger;
+  auditLimit?: number;
 }
 
 export class AgentBridge {
   readonly registry = new AdapterRegistry();
+  readonly audit: AuditLog;
   private readonly accessPolicy: AccessPolicy;
   private readonly logger?: BridgeLogger;
 
   constructor(options: AgentBridgeOptions = {}) {
     this.accessPolicy = options.accessPolicy ?? new AllowAllAccessPolicy();
     this.logger = options.logger;
+    this.audit = new AuditLog(options.auditLimit);
 
     for (const adapter of options.adapters ?? []) {
       this.register(adapter);
@@ -54,13 +59,17 @@ export class AgentBridge {
   }
 
   async call(request: BridgeRequest, principal?: Principal): Promise<BridgeResponse> {
+    const startedAt = Date.now();
+    const traceId = request.meta?.traceId ?? `trace_${Date.now().toString(36)}`;
     const adapter = this.registry.get(request.runtime);
     if (!adapter) {
-      return createErrorResponse({
+      const response = createErrorResponse({
         id: request.id,
         code: BRIDGE_ERROR_CODES.runtimeNotFound,
         message: `Runtime '${request.runtime}' is not registered.`
       });
+      this.recordAudit(request, traceId, startedAt, response, principal);
+      return response;
     }
 
     const access = await this.accessPolicy.authorize({
@@ -70,14 +79,14 @@ export class AgentBridge {
     });
 
     if (!access.allow) {
-      return createErrorResponse({
+      const response = createErrorResponse({
         id: request.id,
         code: BRIDGE_ERROR_CODES.permissionDenied,
         message: access.reason ?? "Permission denied."
       });
+      this.recordAudit(request, traceId, startedAt, response, principal);
+      return response;
     }
-
-    const traceId = request.meta?.traceId ?? `trace_${Date.now().toString(36)}`;
 
     try {
       const result = await adapter.call(
@@ -95,7 +104,9 @@ export class AgentBridge {
         }
       );
 
-      return createSuccessResponse(request, toJsonValue(result));
+      const response = createSuccessResponse(request, toJsonValue(result));
+      this.recordAudit(request, traceId, startedAt, response, principal);
+      return response;
     } catch (error) {
       const maybeError = error as {
         code?: number;
@@ -109,12 +120,14 @@ export class AgentBridge {
         error
       });
 
-      return createErrorResponse({
+      const response = createErrorResponse({
         id: request.id,
         code: maybeError.code ?? BRIDGE_ERROR_CODES.internalError,
         message: maybeError.message ?? "Adapter call failed.",
         data: maybeError.data
       });
+      this.recordAudit(request, traceId, startedAt, response, principal);
+      return response;
     }
   }
 
@@ -122,12 +135,85 @@ export class AgentBridge {
     const runtimes = await Promise.all(
       this.registry.list().map(async (adapter) => ({
         ...adapter.info,
-        capabilities: await adapter.capabilities()
+        capabilities: await adapter.capabilities(),
+        methodCount: (await this.getAdapterMethods(adapter)).length
       }))
     );
 
     return toJsonValue({
       runtimes
+    });
+  }
+
+  async listMethods(runtimeId?: string): Promise<JsonValue> {
+    const adapters = runtimeId
+      ? this.registry.get(runtimeId)
+        ? [this.registry.get(runtimeId)!]
+        : []
+      : this.registry.list();
+
+    const runtimes = await Promise.all(
+      adapters.map(async (adapter) => ({
+        runtime: adapter.info.id,
+        methods: await this.getAdapterMethods(adapter)
+      }))
+    );
+
+    return toJsonValue({
+      runtimes
+    });
+  }
+
+  listAudit(limit = 50): JsonValue {
+    return this.audit.toJson(limit);
+  }
+
+  private recordAudit(
+    request: BridgeRequest,
+    traceId: string,
+    startedAt: number,
+    response: BridgeResponse,
+    principal?: Principal
+  ): void {
+    const error = "error" in response ? response.error : undefined;
+    this.audit.record({
+      id: `audit_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+      requestId: request.id ?? null,
+      traceId,
+      runtime: request.runtime,
+      method: request.method,
+      status: error ? "error" : "success",
+      code: error?.code,
+      message: error?.message,
+      durationMs: Date.now() - startedAt,
+      principalId: principal?.id,
+      source: typeof request.meta?.source === "string" ? request.meta.source : undefined,
+      timestamp: new Date().toISOString()
+    });
+  }
+
+  private async getAdapterMethods(
+    adapter: AgentRuntimeAdapter
+  ): Promise<RuntimeMethodDefinition[]> {
+    if (adapter.methods) {
+      return adapter.methods();
+    }
+
+    const capabilities = await adapter.capabilities();
+    return Object.entries(capabilities).flatMap(([capability, descriptor]) => {
+      if (
+        typeof descriptor === "object" &&
+        descriptor.methods &&
+        descriptor.methods.length > 0
+      ) {
+        return descriptor.methods.map((name) => ({
+          name,
+          capability,
+          risk: descriptor.admin ? "admin" : descriptor.write ? "write" : "read"
+        }));
+      }
+
+      return [];
     });
   }
 }

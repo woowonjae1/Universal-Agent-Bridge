@@ -28,6 +28,9 @@ This repository starts with a working v0.1 foundation:
 - `@uab/adapter-sdk`: runtime adapter contract and shared capability types.
 - `@uab/core`: adapter registry, request router, and scoped access policy.
 - `@uab/adapter-mock`: in-memory adapter for demos and tests.
+- `@uab/adapter-http-jsonrpc`: generic adapter for real agents that expose HTTP JSON-RPC.
+- `@uab/adapter-hermes`: Hermes Agent API Server adapter.
+- `@uab/adapter-openclaw`: OpenClaw Gateway adapter with CLI fallback.
 - `@uab/transport-http`: Node.js HTTP transport with `/rpc`, `/health`, and `/runtimes`.
 - `@uab/cli`: local demo, HTTP server, and one-shot call commands.
 
@@ -48,6 +51,46 @@ npm run demo
 Start the HTTP bridge:
 
 ```bash
+npm run serve -- --port 8787
+```
+
+Start the dashboard UI in a second terminal:
+
+```bash
+npm run dashboard
+```
+
+Open `http://127.0.0.1:5173` and keep the API endpoint set to `http://127.0.0.1:8787`.
+
+Connect an external HTTP agent:
+
+```bash
+npm run example:agent
+$env:UAB_HTTP_RUNTIME_URL="http://127.0.0.1:9000"
+$env:UAB_HTTP_RUNTIME_ID="example-agent"
+npm run serve -- --port 8787
+```
+
+Connect Hermes:
+
+```bash
+$env:UAB_HERMES_URL="http://127.0.0.1:8642"
+$env:UAB_HERMES_TOKEN="change-me-local-dev"
+npm run serve -- --port 8787
+```
+
+Connect OpenClaw Gateway:
+
+```bash
+$env:UAB_OPENCLAW_GATEWAY_URL="ws://127.0.0.1:18789"
+$env:UAB_OPENCLAW_TOKEN="your-gateway-token"
+npm run serve -- --port 8787
+```
+
+If OpenClaw device pairing is already handled by the local CLI, use fallback mode:
+
+```bash
+$env:UAB_OPENCLAW_MODE="cli"
 npm run serve -- --port 8787
 ```
 
@@ -79,6 +122,8 @@ packages/
   adapter-sdk/
   core/
   adapter-mock/
+  adapter-hermes/
+  adapter-openclaw/
   transport-http/
   cli/
 docs/
@@ -91,8 +136,6 @@ docs/
 ## Roadmap
 
 - Add MQTT transport as the first remote-first transport.
-- Add an OpenClaw adapter based on public SDK boundaries.
-- Add an experimental Hermes adapter.
-- Add a browser dashboard for runtime discovery, calls, logs, and capability inspection.
+- Expand OpenClaw and Hermes adapters with streaming event support.
+- Add adapter conformance tests for more real-agent method families.
 - Add token-based auth, pairing flows, and persistent audit logs.
-
