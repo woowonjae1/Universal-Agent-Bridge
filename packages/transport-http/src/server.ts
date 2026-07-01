@@ -74,6 +74,21 @@ export function createHttpBridgeServer(options: HttpBridgeServerOptions): Server
         return;
       }
 
+      if (request.method === "GET" && url.pathname === "/sessions") {
+        sendJson(response, 200, options.bridge.listSessions());
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/cancel") {
+        const payload = await readJsonBody(request, maxBodyBytes);
+        const requestId = readCancelRequestId(payload);
+        sendJson(response, 200, {
+          cancelled: options.bridge.cancel(requestId),
+          requestId
+        });
+        return;
+      }
+
       if (request.method === "GET" && url.pathname === "/agui/health") {
         sendJson(response, 200, {
           status: "ok",
@@ -85,13 +100,19 @@ export function createHttpBridgeServer(options: HttpBridgeServerOptions): Server
 
       if (request.method === "POST" && url.pathname === "/agui/runs") {
         const payload = await readJsonBody(request, maxBodyBytes);
-        await sendAgUiRun(response, options.bridge, payload);
+        await sendAgUiRun(request, response, options.bridge, payload);
         return;
       }
 
       if (request.method === "POST" && url.pathname === rpcPath) {
         const payload = await readJsonBody(request, maxBodyBytes);
+        const requestId = readBridgeRequestId(payload);
+        const onClose = () => {
+          if (requestId) options.bridge.cancel(requestId);
+        };
+        request.on("close", onClose);
         const bridgeResponse = await options.bridge.handleRequest(payload);
+        request.off("close", onClose);
         sendJson(response, "error" in bridgeResponse ? 400 : 200, bridgeResponse);
         return;
       }
@@ -129,6 +150,7 @@ function sendJson(response: ServerResponse, statusCode: number, payload: unknown
 }
 
 async function sendAgUiRun(
+  request: IncomingMessage,
   response: ServerResponse,
   bridge: AgentBridge,
   payload: unknown
@@ -139,7 +161,7 @@ async function sendAgUiRun(
   try {
     descriptor = readBridgeRun(payload);
   } catch (error) {
-    writeSse(response, createAgUiEvent({
+    await writeSse(response, createAgUiEvent({
       type: "RUN_ERROR",
       message: error instanceof Error ? error.message : "Invalid AG-UI run input.",
       code: "INVALID_AG_UI_INPUT"
@@ -149,14 +171,17 @@ async function sendAgUiRun(
   }
 
   const input = payload as AgUiRunAgentInput;
-  writeSse(response, createAgUiEvent({
+  const onClose = () => bridge.cancel(String(descriptor.request.id ?? descriptor.runId));
+  request.on("close", onClose);
+
+  await writeSse(response, createAgUiEvent({
     type: "RUN_STARTED",
     threadId: descriptor.threadId,
     runId: descriptor.runId,
     parentRunId: descriptor.parentRunId,
     input
   }));
-  writeSse(response, createAgUiEvent({
+  await writeSse(response, createAgUiEvent({
     type: "STATE_SNAPSHOT",
     snapshot: {
       bridge: "universal-agent-bridge",
@@ -165,7 +190,7 @@ async function sendAgUiRun(
       status: "calling"
     }
   }));
-  writeSse(response, createAgUiEvent({
+  await writeSse(response, createAgUiEvent({
     type: "CUSTOM",
     name: "uab.request",
     value: {
@@ -175,13 +200,13 @@ async function sendAgUiRun(
       requestId: descriptor.request.id
     }
   }));
-  writeSse(response, createAgUiEvent({
+  await writeSse(response, createAgUiEvent({
     type: "STEP_STARTED",
     stepName: "bridge.call"
   }));
 
   if (bridge.registry.get(descriptor.runtime)?.stream) {
-    writeSse(response, createAgUiEvent({
+    await writeSse(response, createAgUiEvent({
       type: "TEXT_MESSAGE_START",
       messageId: `msg_${descriptor.runId}`,
       role: "assistant"
@@ -193,16 +218,17 @@ async function sendAgUiRun(
         if (agUiEvent.type === "RUN_ERROR") {
           endedWithError = true;
         }
-        writeSse(response, agUiEvent);
+        await writeSse(response, agUiEvent);
       }
     }
 
     if (!endedWithError) {
-      writeSse(response, createAgUiEvent({
+      await writeSse(response, createAgUiEvent({
         type: "TEXT_MESSAGE_END",
         messageId: `msg_${descriptor.runId}`
       }));
     }
+    request.off("close", onClose);
     response.end();
     return;
   }
@@ -210,8 +236,9 @@ async function sendAgUiRun(
   const bridgeResponse = await bridge.handleRequest(descriptor.request);
   const [, , , , ...tailEvents] = createBridgeRunEvents(input, descriptor, bridgeResponse);
   for (const event of tailEvents) {
-    writeSse(response, event);
+    await writeSse(response, event);
   }
+  request.off("close", onClose);
   response.end();
 }
 
@@ -223,8 +250,14 @@ function writeSseHeaders(response: ServerResponse): void {
   response.flushHeaders?.();
 }
 
-function writeSse(response: ServerResponse, event: AgUiEvent): void {
-  response.write(encodeSseEvent(event));
+function writeSse(response: ServerResponse, event: AgUiEvent): Promise<void> {
+  return new Promise((resolve) => {
+    if (response.write(encodeSseEvent(event))) {
+      resolve();
+      return;
+    }
+    response.once("drain", resolve);
+  });
 }
 
 function writeCorsHeaders(response: ServerResponse, cors: CorsOptions | false): void {
@@ -260,4 +293,23 @@ async function readJsonBody(request: IncomingMessage, maxBodyBytes: number): Pro
   }
 
   return JSON.parse(body);
+}
+
+function readBridgeRequestId(payload: unknown): string | undefined {
+  if (!isRecord(payload)) return undefined;
+  const id = payload.id;
+  if (typeof id === "string" || typeof id === "number") return String(id);
+  return undefined;
+}
+
+function readCancelRequestId(payload: unknown): string {
+  if (!isRecord(payload)) throw new Error("Cancel request body must be an object.");
+  const value = payload.requestId ?? payload.id;
+  if (typeof value === "string" && value.trim() !== "") return value.trim();
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  throw new Error("Cancel request requires requestId.");
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }

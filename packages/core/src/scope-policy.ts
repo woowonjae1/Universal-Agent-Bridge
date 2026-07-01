@@ -35,11 +35,11 @@ export class ScopeAccessPolicy implements AccessPolicy {
 
     if (
       principal.runtimeAllowlist &&
-      !principal.runtimeAllowlist.includes(request.runtime)
+      (!request.runtime || !principal.runtimeAllowlist.includes(request.runtime))
     ) {
       return {
         allow: false,
-        reason: `Principal cannot access runtime '${request.runtime}'.`
+        reason: `Principal cannot access runtime '${request.runtime ?? "unresolved"}'.`
       };
     }
 
@@ -96,4 +96,3 @@ export function hasScope(scopes: string[], requiredScope: string): boolean {
     scopes.includes(`${domain}:*`)
   );
 }
-

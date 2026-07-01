@@ -52,6 +52,12 @@ export interface AdapterCallContext {
   requestId: BridgeRequestId;
   traceId: string;
   principal?: Principal;
+  session?: {
+    id: string;
+    action?: "create" | "resume";
+    runtime: string;
+    metadata?: import("@uab/protocol").JsonObject;
+  };
   signal?: AbortSignal;
   logger?: BridgeLogger;
 }

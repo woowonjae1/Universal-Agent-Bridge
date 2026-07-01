@@ -30,12 +30,12 @@ This repository starts with a working v0.1 foundation:
 - `@uab/mcp`: MCP server registry and tool invocation layer.
 - `@uab/a2a`: A2A remote agent registry and JSON-RPC client layer.
 - `@uab/adapter-sdk`: runtime adapter contract and shared capability types.
-- `@uab/core`: adapter registry, request router, and scoped access policy.
+- `@uab/core`: adapter registry, session-aware request router, scoped access policy, cancellation, timeouts, and concurrency limits.
 - `@uab/adapter-mock`: in-memory adapter for demos and tests.
 - `@uab/adapter-http-jsonrpc`: generic adapter for real agents that expose HTTP JSON-RPC.
 - `@uab/adapter-hermes`: Hermes Agent API Server adapter.
 - `@uab/adapter-openclaw`: OpenClaw Gateway adapter with CLI fallback.
-- `@uab/transport-http`: Node.js HTTP transport with `/rpc`, `/agui/runs`, `/health`, and `/runtimes`.
+- `@uab/transport-http`: Node.js HTTP transport with `/rpc`, `/agui/runs`, `/cancel`, `/sessions`, `/health`, and `/runtimes`.
 - `@uab/cli`: local demo, HTTP server, and one-shot call commands.
 
 ## Quick Start
@@ -165,9 +165,26 @@ curl -X POST http://127.0.0.1:8787/rpc ^
   "jsonrpc": "2.0",
   "id": "req_001",
   "runtime": "mock",
+  "session": {
+    "id": "project-main",
+    "action": "create"
+  },
   "method": "sessions.list",
-  "params": {}
+  "params": {},
+  "meta": {
+    "timeoutMs": 30000
+  }
 }
+```
+
+The first request for a session binds it to the selected runtime. Later requests can provide only the same `session.id`; the bridge resolves the runtime from its sticky session table.
+
+Cancel an active call:
+
+```bash
+curl -X POST http://127.0.0.1:8787/cancel ^
+  -H "content-type: application/json" ^
+  -d "{\"requestId\":\"req_001\"}"
 ```
 
 ## Repository Layout

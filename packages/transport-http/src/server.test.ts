@@ -259,6 +259,99 @@ test("HTTP transport forwards A2UI envelopes through AG-UI custom events", async
   }
 });
 
+test("HTTP transport exposes bridge session bindings", async () => {
+  const bridge = new AgentBridge({
+    adapters: [adapter]
+  });
+  const server = createHttpBridgeServer({ bridge });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+
+  try {
+    const port = readPort(server);
+
+    await fetch(`http://127.0.0.1:${port}/rpc`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: "session_http",
+        runtime: "test",
+        session: { id: "http_session" },
+        method: "sessions.list",
+        params: {}
+      })
+    });
+
+    const response = await fetch(`http://127.0.0.1:${port}/sessions`);
+    const body = await response.json() as { sessions: Array<{ id: string; runtime: string }> };
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(body.sessions.map((session) => ({
+      id: session.id,
+      runtime: session.runtime
+    })), [
+      {
+        id: "http_session",
+        runtime: "test"
+      }
+    ]);
+  } finally {
+    await close(server);
+  }
+});
+
+test("HTTP transport cancels active RPC requests", async () => {
+  const bridge = new AgentBridge({
+    adapters: [{
+      ...adapter,
+      async call(_request, context) {
+        await new Promise<void>((resolve, reject) => {
+          context.signal?.addEventListener("abort", () => {
+            reject(Object.assign(new Error("cancelled"), { code: -32005 }));
+          }, { once: true });
+          setTimeout(resolve, 500);
+        });
+        return { ok: true };
+      }
+    }]
+  });
+  const server = createHttpBridgeServer({ bridge });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+
+  try {
+    const port = readPort(server);
+    const pending = fetch(`http://127.0.0.1:${port}/rpc`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: "http_cancel",
+        runtime: "test",
+        method: "sessions.list",
+        params: {}
+      })
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const cancelResponse = await fetch(`http://127.0.0.1:${port}/cancel`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ requestId: "http_cancel" })
+    });
+    const cancelBody = await cancelResponse.json() as { cancelled: boolean };
+    const rpcResponse = await pending;
+    const rpcBody = await rpcResponse.json() as { error?: { message: string; code: number } };
+
+    assert.equal(cancelBody.cancelled, true);
+    assert.equal(rpcBody.error?.message, "cancelled");
+    assert.equal(rpcBody.error?.code, -32005);
+  } finally {
+    await close(server);
+  }
+});
+
 function readPort(server: ReturnType<typeof createHttpBridgeServer>): number {
   const address = server.address();
   assert.equal(typeof address, "object");

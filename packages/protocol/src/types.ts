@@ -12,10 +12,17 @@ export interface BridgeRequestMeta {
   [key: string]: JsonValue | undefined;
 }
 
+export interface BridgeSessionRef {
+  id: string;
+  action?: "create" | "resume";
+  metadata?: JsonObject;
+}
+
 export interface BridgeRequest {
   jsonrpc: "2.0";
   id?: BridgeRequestId;
-  runtime: string;
+  runtime?: string;
+  session?: BridgeSessionRef;
   method: string;
   params?: JsonValue;
   meta?: BridgeRequestMeta;
@@ -40,4 +47,3 @@ export interface BridgeErrorResponse {
 }
 
 export type BridgeResponse = BridgeSuccessResponse | BridgeErrorResponse;
-
