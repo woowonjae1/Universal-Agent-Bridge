@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { generateKeyPairSync } from "node:crypto";
 import { once } from "node:events";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -7,7 +8,10 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
 import { WebSocket, WebSocketServer } from "ws";
-import { createOpenClawAdapter } from "./index.js";
+import {
+  createOpenClawAdapter,
+  type OpenClawDeviceIdentityOptions
+} from "./index.js";
 
 test("OpenClaw adapter performs Gateway connect then RPC call", async () => {
   const server = createServer();
@@ -140,6 +144,155 @@ test("OpenClaw adapter streams Gateway event frames", async () => {
   }
 });
 
+test("OpenClaw adapter signs Gateway connect with device challenge", async () => {
+  const server = createServer();
+  const wss = new WebSocketServer({ server });
+  const identity = createTestDeviceIdentity();
+  let connectParams: Record<string, unknown> | undefined;
+
+  wss.on("connection", (socket: WebSocket) => {
+    socket.send(JSON.stringify({
+      type: "event",
+      event: "connect.challenge",
+      payload: { nonce: "nonce_test" }
+    }));
+    socket.on("message", (raw: Buffer) => {
+      const frame = JSON.parse(String(raw)) as {
+        id: string;
+        method: string;
+        params?: Record<string, unknown>;
+      };
+      if (frame.method === "connect") {
+        connectParams = frame.params;
+        socket.send(JSON.stringify({
+          type: "res",
+          id: frame.id,
+          ok: true,
+          payload: { type: "hello-ok", protocol: 4 }
+        }));
+        return;
+      }
+
+      socket.send(JSON.stringify({
+        type: "res",
+        id: frame.id,
+        ok: true,
+        payload: { status: "ok" }
+      }));
+    });
+  });
+
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const port = readPort(server);
+
+  try {
+    const adapter = createOpenClawAdapter({
+      gatewayUrl: `ws://127.0.0.1:${port}`,
+      deviceIdentity: identity,
+      scopes: ["operator.read"]
+    });
+    const result = await adapter.call({
+      method: "status",
+      params: {},
+      raw: {
+        jsonrpc: "2.0",
+        id: "req",
+        runtime: "openclaw",
+        method: "status"
+      }
+    }, {
+      requestId: "req",
+      traceId: "trace"
+    });
+
+    assert.deepEqual(result, { status: "ok" });
+    assert.ok(connectParams);
+    assert.deepEqual(connectParams.scopes, ["operator.read"]);
+    const device = connectParams.device as Record<string, unknown>;
+    assert.equal(device.id, "device_test");
+    assert.equal(device.nonce, "nonce_test");
+    assert.equal(typeof device.publicKey, "string");
+    assert.equal(typeof device.signature, "string");
+    assert.equal(typeof device.signedAt, "number");
+  } finally {
+    wss.close();
+    await closeServer(server);
+  }
+});
+
+test("OpenClaw adapter persists Gateway device token from hello auth", async () => {
+  const server = createServer();
+  const wss = new WebSocketServer({ server });
+  const dir = await mkdtemp(join(tmpdir(), "uab-openclaw-auth-"));
+  const storePath = join(dir, "device-auth.json");
+  const identity = createTestDeviceIdentity();
+
+  wss.on("connection", (socket: WebSocket) => {
+    socket.send(JSON.stringify({
+      type: "event",
+      event: "connect.challenge",
+      payload: { nonce: "nonce_store" }
+    }));
+    socket.on("message", (raw: Buffer) => {
+      const frame = JSON.parse(String(raw)) as { id: string; method: string };
+      socket.send(JSON.stringify({
+        type: "res",
+        id: frame.id,
+        ok: true,
+        payload: frame.method === "connect"
+          ? {
+            type: "hello-ok",
+            protocol: 4,
+            auth: {
+              role: "operator",
+              deviceToken: "device-token-1",
+              scopes: ["operator.read", "operator.write"]
+            }
+          }
+          : { status: "ok" }
+      }));
+    });
+  });
+
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const port = readPort(server);
+
+  try {
+    const adapter = createOpenClawAdapter({
+      gatewayUrl: `ws://127.0.0.1:${port}`,
+      deviceIdentity: identity,
+      deviceAuthStorePath: storePath
+    });
+    await adapter.call({
+      method: "status",
+      params: {},
+      raw: {
+        jsonrpc: "2.0",
+        id: "req",
+        runtime: "openclaw",
+        method: "status"
+      }
+    }, {
+      requestId: "req",
+      traceId: "trace"
+    });
+
+    const stored = JSON.parse(await readFile(storePath, "utf8")) as {
+      deviceId: string;
+      tokens: { operator: { token: string; scopes: string[] } };
+    };
+
+    assert.equal(stored.deviceId, "device_test");
+    assert.equal(stored.tokens.operator.token, "device-token-1");
+    assert.deepEqual(stored.tokens.operator.scopes, ["operator.read", "operator.write"]);
+  } finally {
+    wss.close();
+    await closeServer(server);
+  }
+});
+
 test("OpenClaw CLI fallback maps local session and model commands", async () => {
   const dir = await mkdtemp(join(tmpdir(), "uab-openclaw-cli-"));
   const logPath = join(dir, "calls.jsonl");
@@ -260,4 +413,15 @@ function closeServer(server: ReturnType<typeof createServer>): Promise<void> {
   return new Promise((resolve, reject) => {
     server.close((error) => error ? reject(error) : resolve());
   });
+}
+
+function createTestDeviceIdentity(): OpenClawDeviceIdentityOptions {
+  const { privateKey } = generateKeyPairSync("ed25519");
+  return {
+    deviceId: "device_test",
+    privateKeyPem: privateKey.export({
+      type: "pkcs8",
+      format: "pem"
+    }).toString()
+  };
 }

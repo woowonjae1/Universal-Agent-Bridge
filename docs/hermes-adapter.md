@@ -98,6 +98,20 @@ curl.exe -N -X POST http://127.0.0.1:8787/agui/runs `
 
 Bearer auth is sent as `Authorization: Bearer <UAB_HERMES_TOKEN>`.
 
+## Authentication Notes
+
+Hermes API Server does not use the OpenClaw Gateway device-pairing handshake. There is no `openclaw devices approve` equivalent for Hermes in UAB. If Hermes returns `401` or `403`, fix the API Server key or URL:
+
+```bash
+API_SERVER_ENABLED=true
+API_SERVER_KEY=change-me-local-dev
+```
+
+```powershell
+$env:UAB_HERMES_URL="http://127.0.0.1:8642"
+$env:UAB_HERMES_TOKEN="change-me-local-dev"
+```
+
 ## Streaming
 
 Hermes SSE messages are normalized into UAB stream events:

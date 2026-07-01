@@ -3,11 +3,17 @@ import { createA2aAdapter, readA2aAgentConfigsFromEnv } from "@uab/a2a";
 import { createHermesAdapter } from "@uab/adapter-hermes";
 import { createHttpJsonRpcAdapter } from "@uab/adapter-http-jsonrpc";
 import { createMockAdapter } from "@uab/adapter-mock";
-import { createOpenClawAdapter } from "@uab/adapter-openclaw";
+import {
+  createOpenClawAdapter,
+  type OpenClawDeviceIdentityOptions
+} from "@uab/adapter-openclaw";
 import { AgentBridge } from "@uab/core";
 import { createMcpAdapter, readMcpServerConfigsFromEnv } from "@uab/mcp";
 import { createHttpBridgeServer, listen } from "@uab/transport-http";
 import type { BridgeRequest } from "@uab/protocol";
+import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
 
 async function main(argv: string[]): Promise<void> {
   const [command = "help", ...args] = argv;
@@ -154,6 +160,13 @@ function registerOpenClawRuntimeFromEnv(bridge: AgentBridge): void {
       gatewayUrl,
       token: process.env.UAB_OPENCLAW_TOKEN,
       password: process.env.UAB_OPENCLAW_PASSWORD,
+      deviceToken: process.env.UAB_OPENCLAW_DEVICE_TOKEN,
+      deviceIdentity: readOpenClawDeviceIdentityFromEnv(process.env),
+      deviceAuthStorePath: readOpenClawDeviceAuthStorePath(process.env),
+      connectChallengeTimeoutMs: readEnvNumber("UAB_OPENCLAW_CONNECT_CHALLENGE_TIMEOUT_MS", 5_000),
+      role: process.env.UAB_OPENCLAW_ROLE,
+      clientId: process.env.UAB_OPENCLAW_CLIENT_ID,
+      deviceFamily: process.env.UAB_OPENCLAW_DEVICE_FAMILY,
       mode: cliMode ? "cli" : "gateway",
       cliCommand: process.env.UAB_OPENCLAW_CLI,
       scopes: readCsvEnv("UAB_OPENCLAW_SCOPES"),
@@ -200,6 +213,106 @@ function readCsvEnv(name: string): string[] | undefined {
   if (!value) return undefined;
   const entries = value.split(",").map((entry) => entry.trim()).filter(Boolean);
   return entries.length > 0 ? entries : undefined;
+}
+
+function readOpenClawDeviceIdentityFromEnv(
+  env: NodeJS.ProcessEnv
+): OpenClawDeviceIdentityOptions | undefined {
+  const explicitPrivateKey = readEnvTextOrFile(
+    env.UAB_OPENCLAW_DEVICE_PRIVATE_KEY_PEM,
+    env.UAB_OPENCLAW_DEVICE_PRIVATE_KEY_PATH
+  );
+  const explicitPublicKey = readEnvTextOrFile(
+    env.UAB_OPENCLAW_DEVICE_PUBLIC_KEY_PEM,
+    env.UAB_OPENCLAW_DEVICE_PUBLIC_KEY_PATH
+  );
+
+  if (explicitPrivateKey) {
+    const explicitIdentity = parseOpenClawDeviceIdentityJson(explicitPrivateKey);
+    if (explicitIdentity) {
+      return {
+        ...explicitIdentity,
+        deviceId: env.UAB_OPENCLAW_DEVICE_ID ?? explicitIdentity.deviceId,
+        publicKeyPem: explicitPublicKey ?? explicitIdentity.publicKeyPem
+      };
+    }
+
+    return {
+      deviceId: env.UAB_OPENCLAW_DEVICE_ID,
+      publicKeyPem: explicitPublicKey,
+      privateKeyPem: explicitPrivateKey
+    };
+  }
+
+  if (env.UAB_OPENCLAW_AUTO_DEVICE_IDENTITY === "0") return undefined;
+
+  const identityPath = env.UAB_OPENCLAW_DEVICE_IDENTITY_PATH
+    ? resolveUserPath(env.UAB_OPENCLAW_DEVICE_IDENTITY_PATH, env)
+    : join(resolveOpenClawStateDir(env), "identity", "device.json");
+
+  try {
+    if (!existsSync(identityPath)) return undefined;
+    const parsed = JSON.parse(readFileSync(identityPath, "utf8")) as unknown;
+    return normalizeOpenClawDeviceIdentityJson(parsed);
+  } catch {
+    return undefined;
+  }
+}
+
+function readOpenClawDeviceAuthStorePath(env: NodeJS.ProcessEnv): string | undefined {
+  if (env.UAB_OPENCLAW_DEVICE_AUTH_PATH) {
+    return resolveUserPath(env.UAB_OPENCLAW_DEVICE_AUTH_PATH, env);
+  }
+  if (env.UAB_OPENCLAW_AUTO_DEVICE_AUTH === "0") return undefined;
+  return join(resolveOpenClawStateDir(env), "identity", "device-auth.json");
+}
+
+function readEnvTextOrFile(value: string | undefined, filePath: string | undefined): string | undefined {
+  if (value && value.trim() !== "") return value.trim();
+  if (!filePath || filePath.trim() === "") return undefined;
+  try {
+    return readFileSync(resolveUserPath(filePath, process.env), "utf8").trim();
+  } catch {
+    return undefined;
+  }
+}
+
+function parseOpenClawDeviceIdentityJson(text: string): OpenClawDeviceIdentityOptions | undefined {
+  try {
+    return normalizeOpenClawDeviceIdentityJson(JSON.parse(text) as unknown);
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizeOpenClawDeviceIdentityJson(value: unknown): OpenClawDeviceIdentityOptions | undefined {
+  if (!isRecord(value) || typeof value.privateKeyPem !== "string") return undefined;
+  return {
+    deviceId: typeof value.deviceId === "string" ? value.deviceId : undefined,
+    publicKeyPem: typeof value.publicKeyPem === "string" ? value.publicKeyPem : undefined,
+    privateKeyPem: value.privateKeyPem
+  };
+}
+
+function resolveOpenClawStateDir(env: NodeJS.ProcessEnv): string {
+  if (env.OPENCLAW_STATE_DIR && env.OPENCLAW_STATE_DIR.trim() !== "") {
+    return resolveUserPath(env.OPENCLAW_STATE_DIR, env);
+  }
+  return join(homedir(), ".openclaw");
+}
+
+function resolveUserPath(value: string, env: NodeJS.ProcessEnv): string {
+  const trimmed = value.trim();
+  if (trimmed === "~") return homedir();
+  if (trimmed.startsWith("~/") || trimmed.startsWith("~\\")) {
+    return join(homedir(), trimmed.slice(2));
+  }
+  const withEnv = trimmed.replace(/\$([A-Z_][A-Z0-9_]*)/gi, (_match, name: string) => env[name] ?? "");
+  return resolve(withEnv);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function readStringArg(args: string[], name: string, fallback: string): string {

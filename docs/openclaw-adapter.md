@@ -15,6 +15,36 @@ $env:UAB_OPENCLAW_RUNTIME_ID="openclaw"
 npm run serve -- --port 8787
 ```
 
+### Device Pairing
+
+OpenClaw Gateway may require a paired device identity in addition to the shared token/password. UAB Gateway mode now supports that flow:
+
+- If `UAB_OPENCLAW_DEVICE_PRIVATE_KEY_PEM` or `UAB_OPENCLAW_DEVICE_PRIVATE_KEY_PATH` is set, UAB signs the Gateway `connect.challenge` with that Ed25519 device key.
+- If neither is set, `uab serve` automatically tries to reuse the local OpenClaw CLI identity at `~/.openclaw/identity/device.json`.
+- If `UAB_OPENCLAW_DEVICE_TOKEN` is not set, UAB also tries to reuse `~/.openclaw/identity/device-auth.json`.
+
+First run against a new Gateway may return `PAIRING_REQUIRED`. Approve the pending request, then retry:
+
+```powershell
+openclaw devices approve --latest
+# verify the printed request, then run the exact command it shows:
+openclaw devices approve <requestId>
+openclaw gateway restart
+```
+
+Useful overrides:
+
+```powershell
+$env:UAB_OPENCLAW_DEVICE_IDENTITY_PATH="$env:USERPROFILE\.openclaw\identity\device.json"
+$env:UAB_OPENCLAW_DEVICE_AUTH_PATH="$env:USERPROFILE\.openclaw\identity\device-auth.json"
+$env:UAB_OPENCLAW_DEVICE_TOKEN="device-token-from-rotation"
+$env:UAB_OPENCLAW_SCOPES="operator.read,operator.write"
+```
+
+`UAB_OPENCLAW_DEVICE_PRIVATE_KEY_PATH` can point to a raw PEM private key file or to an OpenClaw `device.json` file containing `privateKeyPem`.
+
+For a portable UAB deployment, prefer a dedicated persistent device key and approve that device once. Set `UAB_OPENCLAW_AUTO_DEVICE_IDENTITY=0` or `UAB_OPENCLAW_AUTO_DEVICE_AUTH=0` to stop reading the local OpenClaw state directory.
+
 The adapter sends an initial Gateway `connect` request with operator scopes, then forwards UAB methods as Gateway RPC calls:
 
 ```bash

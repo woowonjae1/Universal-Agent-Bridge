@@ -1,5 +1,13 @@
 import { spawn } from "node:child_process";
 import {
+  createHash,
+  createPrivateKey,
+  createPublicKey,
+  sign as signPayload
+} from "node:crypto";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname } from "node:path";
+import {
   AdapterError,
   type AdapterCallRequest,
   type AdapterStreamEvent,
@@ -21,10 +29,23 @@ export interface OpenClawAdapterOptions {
   gatewayUrl?: string;
   token?: string;
   password?: string;
+  deviceToken?: string;
+  deviceIdentity?: OpenClawDeviceIdentityOptions;
+  deviceAuthStorePath?: string;
+  connectChallengeTimeoutMs?: number;
+  role?: string;
+  clientId?: string;
+  deviceFamily?: string;
   scopes?: string[];
   timeoutMs?: number;
   mode?: "gateway" | "cli";
   cliCommand?: string;
+}
+
+export interface OpenClawDeviceIdentityOptions {
+  deviceId?: string;
+  publicKeyPem?: string;
+  privateKeyPem: string;
 }
 
 type GatewayFrame =
@@ -51,6 +72,25 @@ interface WebSocketLike {
 interface WebSocketConstructor {
   new(url: string): WebSocketLike;
 }
+
+interface OpenClawDeviceIdentity {
+  deviceId: string;
+  publicKeyPem: string;
+  privateKeyPem: string;
+}
+
+interface OpenClawConnectAssembly {
+  params: JsonObject;
+  identity?: OpenClawDeviceIdentity;
+  role: string;
+}
+
+interface OpenClawStoredDeviceAuth {
+  token: string;
+  scopes?: string[];
+}
+
+const ED25519_SPKI_PREFIX = Buffer.from("302a300506032b6570032100", "hex");
 
 const DEFAULT_METHODS: RuntimeMethodDefinition[] = [
   {
@@ -482,6 +522,9 @@ async function callOpenClawGatewayWithEvents(
   let closed = false;
   let counter = 0;
   const events: OpenClawGatewayEvent[] = [];
+  let connectChallengeNonce: string | undefined;
+  let resolveChallenge: ((nonce: string | undefined) => void) | undefined;
+  let rejectChallenge: ((error: Error) => void) | undefined;
 
   const sendRequest = (requestMethod: string, requestParams: unknown) => {
     const id = `uab_${Date.now().toString(36)}_${counter++}`;
@@ -508,11 +551,26 @@ async function callOpenClawGatewayWithEvents(
     });
   });
 
+  const waitForConnectChallenge = new Promise<string | undefined>((resolve, reject) => {
+    resolveChallenge = resolve;
+    rejectChallenge = reject;
+  });
+  waitForConnectChallenge.catch(() => undefined);
+
   socket.addEventListener("message", (event) => {
     const frame = parseGatewayFrame(event.data);
     if (!frame) return;
 
     if (frame.type === "event") {
+      if (frame.event === "connect.challenge") {
+        const nonce = readGatewayEventNonce(frame.payload);
+        connectChallengeNonce = nonce;
+        resolveChallenge?.(nonce);
+        resolveChallenge = undefined;
+        rejectChallenge = undefined;
+        return;
+      }
+
       const gatewayEvent: OpenClawGatewayEvent = {
         event: frame.event,
         payload: toJsonValue(frame.payload),
@@ -539,6 +597,11 @@ async function callOpenClawGatewayWithEvents(
 
   socket.addEventListener("close", () => {
     closed = true;
+    rejectChallenge?.(new AdapterError("OpenClaw Gateway WebSocket closed before connect challenge.", {
+      code: BRIDGE_ERROR_CODES.adapterUnavailable
+    }));
+    resolveChallenge = undefined;
+    rejectChallenge = undefined;
     for (const entry of pending.values()) {
       entry.reject(new AdapterError("OpenClaw Gateway WebSocket closed.", {
         code: BRIDGE_ERROR_CODES.adapterUnavailable
@@ -559,24 +622,15 @@ async function callOpenClawGatewayWithEvents(
 
   try {
     await waitForOpen;
-    await sendRequest("connect", {
-      minProtocol: 4,
-      maxProtocol: 4,
-      client: {
-        id: "gateway-client",
-        version: "0.1.0",
-        platform: process.platform,
-        mode: "backend"
-      },
-      role: "operator",
-      scopes: options.scopes ?? ["operator.read", "operator.write"],
-      caps: [],
-      commands: [],
-      permissions: {},
-      auth: buildOpenClawAuth(options),
-      locale: "en-US",
-      userAgent: "universal-agent-bridge/0.1.0"
-    });
+    const challengeNonce = options.deviceIdentity
+      ? await Promise.race([
+        connectChallengeNonce !== undefined ? Promise.resolve(connectChallengeNonce) : waitForConnectChallenge,
+        delayReject(options.connectChallengeTimeoutMs ?? 5_000, "OpenClaw Gateway did not send a connect challenge.")
+      ])
+      : connectChallengeNonce;
+    const connect = await buildOpenClawConnectParams(options, challengeNonce);
+    const hello = await sendRequest("connect", connect.params);
+    await storeOpenClawDeviceAuthFromHello(options, connect, hello);
     connected = true;
     return {
       payload: await sendRequest(method, params),
@@ -763,11 +817,296 @@ function buildOpenClawCliArgs(method: string, params: unknown): string[] {
   }
 }
 
-function buildOpenClawAuth(options: OpenClawAdapterOptions): JsonObject {
+async function buildOpenClawConnectParams(
+  options: OpenClawAdapterOptions,
+  nonce?: string
+): Promise<OpenClawConnectAssembly> {
+  const role = options.role ?? "operator";
+  const clientId = options.clientId ?? "gateway-client";
+  const clientMode = "backend";
+  const platform = process.platform;
+  const identity = options.deviceIdentity
+    ? normalizeOpenClawDeviceIdentity(options.deviceIdentity)
+    : undefined;
+  const storedAuth = identity
+    ? await loadOpenClawDeviceAuth(options.deviceAuthStorePath, identity.deviceId, role)
+    : undefined;
+  const token = normalizeNonEmptyString(options.token);
+  const password = normalizeNonEmptyString(options.password);
+  const explicitDeviceToken = normalizeNonEmptyString(options.deviceToken);
+  const shouldUseStoredDeviceToken = !token && !password && !explicitDeviceToken && Boolean(storedAuth?.token);
+  const deviceToken = explicitDeviceToken ?? (shouldUseStoredDeviceToken ? storedAuth?.token : undefined);
+  const scopes = options.scopes
+    ?? (shouldUseStoredDeviceToken && storedAuth?.scopes?.length ? storedAuth.scopes : undefined)
+    ?? ["operator.read", "operator.write"];
+  const auth = buildOpenClawAuth({
+    token,
+    password,
+    deviceToken
+  });
+  const params: JsonObject = {
+    minProtocol: 4,
+    maxProtocol: 4,
+    client: {
+      id: clientId,
+      version: "0.1.0",
+      platform,
+      ...(options.deviceFamily ? { deviceFamily: options.deviceFamily } : {}),
+      mode: clientMode
+    },
+    role,
+    scopes,
+    caps: [],
+    commands: [],
+    permissions: {},
+    ...(Object.keys(auth).length > 0 ? { auth } : {}),
+    locale: "en-US",
+    userAgent: "universal-agent-bridge/0.1.0"
+  };
+
+  if (identity) {
+    const trimmedNonce = normalizeNonEmptyString(nonce);
+    if (!trimmedNonce) {
+      throw new AdapterError("OpenClaw Gateway device identity requires a connect challenge nonce.", {
+        code: BRIDGE_ERROR_CODES.adapterUnavailable,
+        data: {
+          code: "DEVICE_AUTH_NONCE_REQUIRED",
+          nextStep: "Retry against an OpenClaw Gateway that emits connect.challenge before connect."
+        }
+      });
+    }
+
+    const signedAtMs = Date.now();
+    const signatureToken = token ?? deviceToken;
+    params.device = {
+      id: identity.deviceId,
+      publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+      signature: signOpenClawDevicePayload(identity.privateKeyPem, buildOpenClawDeviceAuthPayloadV3({
+        deviceId: identity.deviceId,
+        clientId,
+        clientMode,
+        role,
+        scopes,
+        signedAtMs,
+        token: signatureToken,
+        nonce: trimmedNonce,
+        platform,
+        deviceFamily: options.deviceFamily
+      })),
+      signedAt: signedAtMs,
+      nonce: trimmedNonce
+    };
+  }
+
+  return {
+    params,
+    identity,
+    role
+  };
+}
+
+function buildOpenClawAuth(options: {
+  token?: string;
+  password?: string;
+  deviceToken?: string;
+}): JsonObject {
   const auth: JsonObject = {};
-  if (options.token) auth.token = options.token;
+  if (options.token ?? options.deviceToken) auth.token = options.token ?? options.deviceToken ?? "";
+  if (options.deviceToken) auth.deviceToken = options.deviceToken;
   if (options.password) auth.password = options.password;
   return auth;
+}
+
+function normalizeOpenClawDeviceIdentity(
+  identity: OpenClawDeviceIdentityOptions
+): OpenClawDeviceIdentity {
+  const privateKeyPem = identity.privateKeyPem.trim();
+  if (!privateKeyPem) {
+    throw new AdapterError("OpenClaw devicePrivateKeyPem is empty.", {
+      code: BRIDGE_ERROR_CODES.invalidParams
+    });
+  }
+
+  const publicKeyPem = identity.publicKeyPem?.trim() || publicKeyPemFromPrivateKey(privateKeyPem);
+  const deviceId = identity.deviceId?.trim() || fingerprintOpenClawPublicKey(publicKeyPem);
+  return {
+    deviceId,
+    publicKeyPem,
+    privateKeyPem
+  };
+}
+
+function publicKeyPemFromPrivateKey(privateKeyPem: string): string {
+  try {
+    return createPublicKey(createPrivateKey(privateKeyPem)).export({
+      type: "spki",
+      format: "pem"
+    }).toString();
+  } catch (error) {
+    throw new AdapterError("OpenClaw devicePrivateKeyPem must be a valid Ed25519 PKCS8 PEM private key.", {
+      code: BRIDGE_ERROR_CODES.invalidParams,
+      data: { message: error instanceof Error ? error.message : String(error) }
+    });
+  }
+}
+
+function fingerprintOpenClawPublicKey(publicKeyPem: string): string {
+  return createHash("sha256").update(deriveOpenClawPublicKeyRaw(publicKeyPem)).digest("hex");
+}
+
+function publicKeyRawBase64UrlFromPem(publicKeyPem: string): string {
+  return base64UrlEncode(deriveOpenClawPublicKeyRaw(publicKeyPem));
+}
+
+function deriveOpenClawPublicKeyRaw(publicKeyPem: string): Buffer {
+  const spki = createPublicKey(publicKeyPem).export({
+    type: "spki",
+    format: "der"
+  }) as Buffer;
+
+  if (
+    spki.length === ED25519_SPKI_PREFIX.length + 32
+    && spki.subarray(0, ED25519_SPKI_PREFIX.length).equals(ED25519_SPKI_PREFIX)
+  ) {
+    return spki.subarray(ED25519_SPKI_PREFIX.length);
+  }
+
+  return spki;
+}
+
+function buildOpenClawDeviceAuthPayloadV3(params: {
+  deviceId: string;
+  clientId: string;
+  clientMode: string;
+  role: string;
+  scopes: string[];
+  signedAtMs: number;
+  token?: string;
+  nonce: string;
+  platform: string;
+  deviceFamily?: string;
+}): string {
+  return [
+    "v3",
+    params.deviceId,
+    params.clientId,
+    params.clientMode,
+    params.role,
+    params.scopes.join(","),
+    String(params.signedAtMs),
+    params.token ?? "",
+    params.nonce,
+    normalizeDeviceMetadataForAuth(params.platform),
+    normalizeDeviceMetadataForAuth(params.deviceFamily)
+  ].join("|");
+}
+
+function signOpenClawDevicePayload(privateKeyPem: string, payload: string): string {
+  return base64UrlEncode(signPayload(null, Buffer.from(payload, "utf8"), createPrivateKey(privateKeyPem)));
+}
+
+function base64UrlEncode(value: Buffer): string {
+  return value
+    .toString("base64")
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replace(/=+$/g, "");
+}
+
+function normalizeDeviceMetadataForAuth(value: unknown): string {
+  if (typeof value !== "string") return "";
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  return trimmed.replace(/[A-Z]/g, (char) => String.fromCharCode(char.charCodeAt(0) + 32));
+}
+
+function normalizeNonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() !== "" ? value.trim() : undefined;
+}
+
+function readGatewayEventNonce(payload: unknown): string | undefined {
+  if (!isJsonObject(payload)) return undefined;
+  return normalizeNonEmptyString(payload.nonce);
+}
+
+function delayReject(ms: number, message: string): Promise<never> {
+  return new Promise((_, reject) => {
+    setTimeout(() => {
+      reject(new AdapterError(message, {
+        code: BRIDGE_ERROR_CODES.timeout
+      }));
+    }, ms);
+  });
+}
+
+async function loadOpenClawDeviceAuth(
+  storePath: string | undefined,
+  deviceId: string,
+  role: string
+): Promise<OpenClawStoredDeviceAuth | undefined> {
+  if (!storePath) return undefined;
+
+  try {
+    const parsed = JSON.parse(await readFile(storePath, "utf8")) as unknown;
+    if (!isJsonObject(parsed) || parsed.version !== 1 || parsed.deviceId !== deviceId) return undefined;
+    const tokens = parsed.tokens;
+    if (!isJsonObject(tokens)) return undefined;
+    const entry = tokens[role];
+    if (!isJsonObject(entry) || typeof entry.token !== "string" || entry.token.trim() === "") return undefined;
+    return {
+      token: entry.token,
+      scopes: readStringArray(entry.scopes)
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+async function storeOpenClawDeviceAuthFromHello(
+  options: OpenClawAdapterOptions,
+  connect: OpenClawConnectAssembly,
+  hello: unknown
+): Promise<void> {
+  if (!options.deviceAuthStorePath || !connect.identity || !isJsonObject(hello)) return;
+  const authInfo = hello.auth;
+  if (!isJsonObject(authInfo) || typeof authInfo.deviceToken !== "string" || authInfo.deviceToken.trim() === "") {
+    return;
+  }
+
+  const role = typeof authInfo.role === "string" && authInfo.role.trim() !== "" ? authInfo.role.trim() : connect.role;
+  const scopes = readStringArray(authInfo.scopes) ?? [];
+
+  let tokens: JsonObject = {};
+  try {
+    const parsed = JSON.parse(await readFile(options.deviceAuthStorePath, "utf8")) as unknown;
+    if (isJsonObject(parsed) && parsed.version === 1 && parsed.deviceId === connect.identity.deviceId && isJsonObject(parsed.tokens)) {
+      tokens = toJsonValue(parsed.tokens) as JsonObject;
+    }
+  } catch {
+    tokens = {};
+  }
+
+  tokens[role] = {
+    token: authInfo.deviceToken,
+    role,
+    scopes,
+    updatedAtMs: Date.now()
+  };
+
+  await mkdir(dirname(options.deviceAuthStorePath), { recursive: true });
+  await writeFile(options.deviceAuthStorePath, JSON.stringify({
+    version: 1,
+    deviceId: connect.identity.deviceId,
+    tokens
+  }, null, 2) + "\n", "utf8");
+}
+
+function readStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const entries = value
+    .filter((entry): entry is string => typeof entry === "string" && entry.trim() !== "")
+    .map((entry) => entry.trim());
+  return entries.length > 0 ? entries : undefined;
 }
 
 function parseGatewayFrame(data: unknown): GatewayFrame | undefined {
@@ -785,15 +1124,42 @@ function openClawFrameError(error: unknown): AdapterError {
     const message = typeof error.message === "string"
       ? error.message
       : "OpenClaw Gateway returned an error.";
+    const data = enrichOpenClawGatewayErrorData(toJsonValue(error) as JsonObject);
     return new AdapterError(message, {
       code: typeof error.code === "number" ? error.code : BRIDGE_ERROR_CODES.adapterUnavailable,
-      data: toJsonValue(error)
+      data
     });
   }
 
   return new AdapterError("OpenClaw Gateway returned an error.", {
     code: BRIDGE_ERROR_CODES.adapterUnavailable
   });
+}
+
+function enrichOpenClawGatewayErrorData(error: JsonObject): JsonValue {
+  const details = isJsonObject(error.details) ? error.details : undefined;
+  const detailCode = typeof details?.code === "string" ? details.code : undefined;
+  const requestId = typeof details?.requestId === "string" && details.requestId.trim() !== ""
+    ? details.requestId.trim()
+    : undefined;
+
+  if (detailCode === "PAIRING_REQUIRED") {
+    return {
+      ...error,
+      nextStep: requestId
+        ? `Run: openclaw devices approve ${requestId}; then retry the UAB OpenClaw call.`
+        : "Run: openclaw devices approve --latest, verify the request, approve the printed request id, then retry the UAB OpenClaw call."
+    };
+  }
+
+  if (detailCode === "DEVICE_IDENTITY_REQUIRED" || detailCode === "CONTROL_UI_DEVICE_IDENTITY_REQUIRED") {
+    return {
+      ...error,
+      nextStep: "Configure UAB_OPENCLAW_DEVICE_PRIVATE_KEY_PATH or UAB_OPENCLAW_DEVICE_PRIVATE_KEY_PEM so UAB can sign the OpenClaw Gateway connect request."
+    };
+  }
+
+  return toJsonValue(error);
 }
 
 function mapOpenClawStreamMethod(method: string): string {
