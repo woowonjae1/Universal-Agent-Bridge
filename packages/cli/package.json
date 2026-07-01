@@ -1,0 +1,28 @@
+{
+  "name": "@uab/cli",
+  "version": "0.1.0",
+  "description": "CLI for Universal Agent Bridge demos and local development.",
+  "type": "module",
+  "bin": {
+    "uab": "./dist/index.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "demo": "node ./dist/index.js demo",
+    "serve": "node ./dist/index.js serve"
+  },
+  "dependencies": {
+    "@uab/adapter-mock": "file:../adapter-mock",
+    "@uab/core": "file:../core",
+    "@uab/protocol": "file:../protocol",
+    "@uab/transport-http": "file:../transport-http"
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist"
+  },
+  "include": ["src/**/*.ts"],
+  "references": [
+    { "path": "../protocol" },
+    { "path": "../adapter-sdk" },
+    { "path": "../core" },
+    { "path": "../adapter-mock" },
+    { "path": "../transport-http" }
+  ]
+}
+

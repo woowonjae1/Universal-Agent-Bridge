@@ -1,0 +1,25 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "composite": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "baseUrl": ".",
+    "paths": {
+      "@uab/protocol": ["packages/protocol/src/index.ts"],
+      "@uab/adapter-sdk": ["packages/adapter-sdk/src/index.ts"],
+      "@uab/core": ["packages/core/src/index.ts"],
+      "@uab/adapter-mock": ["packages/adapter-mock/src/index.ts"],
+      "@uab/transport-http": ["packages/transport-http/src/index.ts"]
+    }
+  }
+}
+

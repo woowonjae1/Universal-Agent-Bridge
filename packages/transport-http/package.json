@@ -1,0 +1,19 @@
+{
+  "name": "@uab/transport-http",
+  "version": "0.1.0",
+  "description": "HTTP transport for Universal Agent Bridge.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "dependencies": {
+    "@uab/core": "file:../core",
+    "@uab/protocol": "file:../protocol"
+  }
+}
