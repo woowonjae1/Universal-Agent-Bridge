@@ -5,6 +5,7 @@ import type {
   AgentRuntimeAdapter,
   BridgeLogger,
   Principal,
+  RuntimeCapabilities,
   RuntimeMethodDefinition
 } from "@uab/adapter-sdk";
 import {
@@ -42,6 +43,14 @@ export interface AgentBridgeOptions {
   runtimeConcurrency?: Record<string, number>;
   persistencePath?: string;
   resourceLimit?: number;
+  maxAttempts?: number;
+  retryBackoffMs?: number;
+  circuitBreaker?: CircuitBreakerOptions;
+}
+
+export interface CircuitBreakerOptions {
+  failureThreshold?: number;
+  cooldownMs?: number;
 }
 
 export class AgentBridge {
@@ -58,6 +67,11 @@ export class AgentBridge {
   private readonly defaultTimeoutMs?: number;
   private readonly runtimeConcurrency: Record<string, number>;
   private readonly store?: JsonBridgeStore;
+  private readonly health: RuntimeHealthTracker;
+  private readonly maxAttempts: number;
+  private readonly retryBackoffMs: number;
+  private readonly capabilityCache = new Map<string, RuntimeCapabilities>();
+  private readonly roundRobin = new Map<string, number>();
 
   constructor(options: AgentBridgeOptions = {}) {
     this.store = options.persistencePath ? new JsonBridgeStore(options.persistencePath) : undefined;
@@ -72,6 +86,9 @@ export class AgentBridge {
     this.defaultTimeoutMs = normalizePositiveNumber(options.defaultTimeoutMs);
     this.runtimeConcurrency = options.runtimeConcurrency ?? {};
     this.globalLimiter = new ConcurrencyLimiter(options.maxConcurrentCalls);
+    this.health = new RuntimeHealthTracker(options.circuitBreaker);
+    this.maxAttempts = Math.max(1, Math.trunc(normalizePositiveNumber(options.maxAttempts) ?? 1));
+    this.retryBackoffMs = normalizePositiveNumber(options.retryBackoffMs) ?? 100;
 
     for (const adapter of options.adapters ?? []) {
       this.register(adapter);
@@ -80,6 +97,7 @@ export class AgentBridge {
 
   register(adapter: AgentRuntimeAdapter): void {
     this.registry.register(adapter);
+    this.capabilityCache.delete(adapter.info.id);
   }
 
   async handleRequest(
@@ -101,70 +119,71 @@ export class AgentBridge {
     const startedAt = Date.now();
     const traceId = request.meta?.traceId ?? `trace_${Date.now().toString(36)}`;
     this.observability.callStarted();
-    const resolved = this.resolveRuntimeRequest(request);
-    if ("error" in resolved) {
-      const response = createErrorResponse({
-        id: request.id,
-        code: resolved.error.code,
-        message: resolved.error.message,
-        data: resolved.error.data
-      });
-      this.recordAudit(request, resolved.runtime ?? "unresolved", traceId, startedAt, response, principal);
-      return response;
-    }
-
-    const { runtime, request: routedRequest } = resolved;
-    const adapter = this.registry.get(runtime);
-    if (!adapter) {
-      const response = createErrorResponse({
-        id: routedRequest.id,
-        code: BRIDGE_ERROR_CODES.runtimeNotFound,
-        message: `Runtime '${runtime}' is not registered.`
-      });
-      this.recordAudit(routedRequest, runtime, traceId, startedAt, response, principal);
-      return response;
-    }
-
-    const access = await this.accessPolicy.authorize({
-      request: routedRequest,
-      adapter,
-      principal
-    });
-
-    if (!access.allow) {
-      const response = createErrorResponse({
-        id: routedRequest.id,
-        code: BRIDGE_ERROR_CODES.permissionDenied,
-        message: access.reason ?? "Permission denied."
-      });
-      this.recordAudit(routedRequest, runtime, traceId, startedAt, response, principal);
-      return response;
-    }
-
-    const active = this.createCallController(routedRequest, traceId);
-    const callRequest = createAdapterCallRequest(routedRequest);
-    const context = this.createAdapterContext(routedRequest, runtime, traceId, principal, active.signal);
-    const limiter = this.runtimeLimiter(runtime);
-
     try {
-      const result = await this.runLimited(active.signal, limiter, () => adapter.call(callRequest, context));
-      const response = createSuccessResponse(routedRequest, toJsonValue(result));
-      if ("result" in response) {
-        this.indexResourcesFromValue(response.result, routedRequest, runtime, traceId);
+      const plan = await this.planTargets(request);
+      if ("error" in plan) {
+        const response = createErrorResponse({
+          id: request.id,
+          code: plan.error.code,
+          message: plan.error.message,
+          data: plan.error.data
+        });
+        this.recordAudit(request, plan.runtime ?? "unresolved", traceId, startedAt, response, principal);
+        return response;
       }
-      this.recordAudit(routedRequest, runtime, traceId, startedAt, response, principal);
-      return response;
-    } catch (error) {
-      const response = this.errorResponseFromAdapterError(routedRequest, error, "Adapter call failed.");
-      this.logger?.error("Adapter call failed.", {
-        runtime,
-        method: routedRequest.method,
-        error
+
+      let lastResponse: BridgeResponse | undefined;
+      for (const runtime of plan.candidates) {
+        const routedRequest: BridgeRequest = { ...plan.request, runtime };
+        const adapter = this.registry.get(runtime);
+        if (!adapter) {
+          lastResponse = createErrorResponse({
+            id: routedRequest.id,
+            code: BRIDGE_ERROR_CODES.runtimeNotFound,
+            message: `Runtime '${runtime}' is not registered.`
+          });
+          this.recordAudit(routedRequest, runtime, traceId, startedAt, lastResponse, principal);
+          continue;
+        }
+
+        if (!this.health.isAvailable(runtime)) {
+          lastResponse = createErrorResponse({
+            id: routedRequest.id,
+            code: BRIDGE_ERROR_CODES.adapterUnavailable,
+            message: `Runtime '${runtime}' is temporarily unavailable (circuit open).`,
+            data: { runtime, circuit: this.health.snapshot(runtime) as unknown as JsonValue }
+          });
+          this.recordAudit(routedRequest, runtime, traceId, startedAt, lastResponse, principal);
+          continue;
+        }
+
+        const access = await this.accessPolicy.authorize({
+          request: routedRequest,
+          adapter,
+          principal
+        });
+        if (!access.allow) {
+          lastResponse = createErrorResponse({
+            id: routedRequest.id,
+            code: BRIDGE_ERROR_CODES.permissionDenied,
+            message: access.reason ?? "Permission denied."
+          });
+          this.recordAudit(routedRequest, runtime, traceId, startedAt, lastResponse, principal);
+          continue;
+        }
+
+        const attempt = await this.attemptCall(adapter, runtime, routedRequest, traceId, startedAt, principal);
+        if (attempt.done) return attempt.response;
+        lastResponse = attempt.response;
+      }
+
+      return lastResponse ?? createErrorResponse({
+        id: request.id,
+        code: BRIDGE_ERROR_CODES.internalError,
+        message: "No runtime handled the request."
       });
-      this.recordAudit(routedRequest, runtime, traceId, startedAt, response, principal);
-      return response;
     } finally {
-      active.dispose();
+      this.observability.callSettled();
     }
   }
 
@@ -175,133 +194,179 @@ export class AgentBridge {
     const startedAt = Date.now();
     const traceId = request.meta?.traceId ?? `trace_${Date.now().toString(36)}`;
     this.observability.callStarted();
-    const resolved = this.resolveRuntimeRequest(request);
-    if ("error" in resolved) {
-      const response = createErrorResponse({
-        id: request.id,
-        code: resolved.error.code,
-        message: resolved.error.message,
-        data: resolved.error.data
-      });
-      this.recordAudit(request, resolved.runtime ?? "unresolved", traceId, startedAt, response, principal);
-      yield {
-        type: "error",
-        message: resolved.error.message,
-        code: resolved.error.code,
-        data: resolved.error.data
-      };
-      return;
-    }
-
-    const { runtime, request: routedRequest } = resolved;
-    const adapter = this.registry.get(runtime);
-    if (!adapter) {
-      const errorEvent: AdapterStreamEvent = {
-        type: "error",
-        message: `Runtime '${runtime}' is not registered.`,
-        code: BRIDGE_ERROR_CODES.runtimeNotFound
-      };
-      const response = createErrorResponse({
-        id: routedRequest.id,
-        code: Number(errorEvent.code),
-        message: errorEvent.message
-      });
-      this.recordAudit(routedRequest, runtime, traceId, startedAt, response, principal);
-      yield errorEvent;
-      return;
-    }
-
-    const access = await this.accessPolicy.authorize({
-      request: routedRequest,
-      adapter,
-      principal
-    });
-
-    if (!access.allow) {
-      const errorEvent: AdapterStreamEvent = {
-        type: "error",
-        message: access.reason ?? "Permission denied.",
-        code: BRIDGE_ERROR_CODES.permissionDenied
-      };
-      const response = createErrorResponse({
-        id: routedRequest.id,
-        code: Number(errorEvent.code),
-        message: errorEvent.message
-      });
-      this.recordAudit(routedRequest, runtime, traceId, startedAt, response, principal);
-      yield errorEvent;
-      return;
-    }
-
-    const active = this.createCallController(routedRequest, traceId);
-    const callRequest = createAdapterCallRequest(routedRequest);
-    const context = this.createAdapterContext(routedRequest, runtime, traceId, principal, active.signal);
-    const limiter = this.runtimeLimiter(runtime);
-
-    let globalAcquired = false;
-    let runtimeAcquired = false;
     try {
-      await this.globalLimiter.acquire(active.signal);
-      globalAcquired = true;
-      await limiter.acquire(active.signal);
-      runtimeAcquired = true;
-
-      if (adapter.stream) {
-        let finalResult: JsonValue | undefined;
-        const iterator = adapter.stream(callRequest, context)[Symbol.asyncIterator]();
-        try {
-          while (true) {
-            const next = await raceWithSignal(iterator.next(), active.signal);
-            if (next.done) break;
-            const event = next.value;
-            if (event.type === "result") {
-              finalResult = event.data;
-            }
-            this.indexResourcesFromStreamEvent(event, routedRequest, runtime, traceId);
-            yield event;
-          }
-        } catch (error) {
-          void iterator.return?.().catch(() => undefined);
-          throw error;
-        }
-
-        const response = createSuccessResponse(routedRequest, finalResult ?? null);
-        this.recordAudit(routedRequest, runtime, traceId, startedAt, response, principal);
+      const plan = await this.planTargets(request);
+      if ("error" in plan) {
+        const response = createErrorResponse({
+          id: request.id,
+          code: plan.error.code,
+          message: plan.error.message,
+          data: plan.error.data
+        });
+        this.recordAudit(request, plan.runtime ?? "unresolved", traceId, startedAt, response, principal);
+        yield {
+          type: "error",
+          message: plan.error.message,
+          code: plan.error.code,
+          data: plan.error.data
+        };
         return;
       }
 
-      const result = await raceWithSignal(
-        Promise.resolve(adapter.call(callRequest, context)),
-        active.signal
-      );
-      const resultJson = toJsonValue(result);
-      const response = createSuccessResponse(routedRequest, resultJson);
-      this.indexResourcesFromValue(resultJson, routedRequest, runtime, traceId);
-      this.recordAudit(routedRequest, runtime, traceId, startedAt, response, principal);
-      yield {
-        type: "result",
-        data: resultJson
-      };
-    } catch (error) {
-      const response = this.errorResponseFromAdapterError(routedRequest, error, "Adapter stream failed.");
-      const maybeError = response.error;
-      this.logger?.error("Adapter stream failed.", {
-        runtime,
-        method: routedRequest.method,
-        error
+      const runtime = plan.candidates[0];
+      const routedRequest: BridgeRequest = { ...plan.request, runtime };
+      const adapter = this.registry.get(runtime);
+      if (!adapter) {
+        const errorEvent: AdapterStreamEvent = {
+          type: "error",
+          message: `Runtime '${runtime}' is not registered.`,
+          code: BRIDGE_ERROR_CODES.runtimeNotFound
+        };
+        const response = createErrorResponse({
+          id: routedRequest.id,
+          code: Number(errorEvent.code),
+          message: errorEvent.message
+        });
+        this.recordAudit(routedRequest, runtime, traceId, startedAt, response, principal);
+        yield errorEvent;
+        return;
+      }
+
+      if (!this.health.isAvailable(runtime)) {
+        const message = `Runtime '${runtime}' is temporarily unavailable (circuit open).`;
+        const response = createErrorResponse({
+          id: routedRequest.id,
+          code: BRIDGE_ERROR_CODES.adapterUnavailable,
+          message
+        });
+        this.recordAudit(routedRequest, runtime, traceId, startedAt, response, principal);
+        yield { type: "error", message, code: BRIDGE_ERROR_CODES.adapterUnavailable };
+        return;
+      }
+
+      const access = await this.accessPolicy.authorize({
+        request: routedRequest,
+        adapter,
+        principal
       });
-      this.recordAudit(routedRequest, runtime, traceId, startedAt, response, principal);
-      yield {
-        type: "error",
-        message: maybeError.message,
-        code: maybeError.code,
-        data: maybeError.data
-      };
+
+      if (!access.allow) {
+        const errorEvent: AdapterStreamEvent = {
+          type: "error",
+          message: access.reason ?? "Permission denied.",
+          code: BRIDGE_ERROR_CODES.permissionDenied
+        };
+        const response = createErrorResponse({
+          id: routedRequest.id,
+          code: Number(errorEvent.code),
+          message: errorEvent.message
+        });
+        this.recordAudit(routedRequest, runtime, traceId, startedAt, response, principal);
+        yield errorEvent;
+        return;
+      }
+
+      const active = this.createCallController(routedRequest, traceId);
+      const callRequest = createAdapterCallRequest(routedRequest);
+      const context = this.createAdapterContext(routedRequest, runtime, traceId, principal, active.signal);
+      const limiter = this.runtimeLimiter(runtime);
+
+      let globalAcquired = false;
+      let runtimeAcquired = false;
+      try {
+        await this.globalLimiter.acquire(active.signal);
+        globalAcquired = true;
+        await limiter.acquire(active.signal);
+        runtimeAcquired = true;
+
+        if (adapter.stream) {
+          let finalResult: JsonValue | undefined;
+          const iterator = adapter.stream(callRequest, context)[Symbol.asyncIterator]();
+          try {
+            while (true) {
+              const next = await raceWithSignal(iterator.next(), active.signal);
+              if (next.done) break;
+              const event = next.value;
+              if (event.type === "result") {
+                finalResult = event.data;
+              }
+              this.indexResourcesFromStreamEvent(event, routedRequest, runtime, traceId);
+              yield event;
+            }
+          } catch (error) {
+            void iterator.return?.().catch(() => undefined);
+            throw error;
+          }
+
+          const response = createSuccessResponse(routedRequest, finalResult ?? null);
+          this.health.recordSuccess(runtime);
+          this.recordAudit(routedRequest, runtime, traceId, startedAt, response, principal);
+          return;
+        }
+
+        const result = await raceWithSignal(
+          Promise.resolve(adapter.call(callRequest, context)),
+          active.signal
+        );
+        const resultJson = toJsonValue(result);
+        const response = createSuccessResponse(routedRequest, resultJson);
+        this.indexResourcesFromValue(resultJson, routedRequest, runtime, traceId);
+        this.health.recordSuccess(runtime);
+        this.recordAudit(routedRequest, runtime, traceId, startedAt, response, principal);
+        yield {
+          type: "result",
+          data: resultJson
+        };
+      } catch (error) {
+        const response = this.errorResponseFromAdapterError(routedRequest, error, "Adapter stream failed.");
+        const maybeError = response.error;
+        if (!active.signal.aborted && isServerFailure(maybeError.code)) {
+          this.health.recordFailure(runtime);
+        }
+        this.logger?.error("Adapter stream failed.", {
+          runtime,
+          method: routedRequest.method,
+          error
+        });
+        this.recordAudit(routedRequest, runtime, traceId, startedAt, response, principal);
+        yield {
+          type: "error",
+          message: maybeError.message,
+          code: maybeError.code,
+          data: maybeError.data
+        };
+      } finally {
+        if (runtimeAcquired) limiter.release();
+        if (globalAcquired) this.globalLimiter.release();
+        active.dispose();
+      }
     } finally {
-      if (runtimeAcquired) limiter.release();
-      if (globalAcquired) this.globalLimiter.release();
-      active.dispose();
+      this.observability.callSettled();
     }
+  }
+
+  /**
+   * Fan-out orchestration: dispatch the same request to every runtime that
+   * advertises `capability` and collect each response. Unlike capability
+   * routing (which picks one healthy runtime), broadcast targets all matches.
+   */
+  async broadcast(
+    capability: string,
+    request: Omit<BridgeRequest, "runtime" | "capability">,
+    principal?: Principal
+  ): Promise<JsonValue> {
+    const cap = normalizeNonEmptyString(capability);
+    if (!cap) {
+      return toJsonValue({ capability, results: [] });
+    }
+    const candidates = await this.candidatesForCapability(cap);
+    const results = await Promise.all(
+      candidates.map(async (runtime) => ({
+        runtime,
+        response: (await this.call({ ...request, runtime } as BridgeRequest, principal)) as unknown as JsonValue
+      }))
+    );
+    return toJsonValue({ capability: cap, results });
   }
 
   async listRuntimes(): Promise<JsonValue> {
@@ -309,13 +374,31 @@ export class AgentBridge {
       this.registry.list().map(async (adapter) => ({
         ...adapter.info,
         capabilities: await adapter.capabilities(),
-        methodCount: (await this.getAdapterMethods(adapter)).length
+        methodCount: (await this.getAdapterMethods(adapter)).length,
+        health: await this.probeHealth(adapter)
       }))
     );
 
     return toJsonValue({
       runtimes
     });
+  }
+
+  async listHealth(runtimeId?: string): Promise<JsonValue> {
+    const adapters = runtimeId
+      ? this.registry.get(runtimeId)
+        ? [this.registry.get(runtimeId)!]
+        : []
+      : this.registry.list();
+
+    const runtimes = await Promise.all(
+      adapters.map(async (adapter) => ({
+        runtime: adapter.info.id,
+        ...(await this.probeHealth(adapter))
+      }))
+    );
+
+    return toJsonValue({ runtimes });
   }
 
   async listMethods(runtimeId?: string): Promise<JsonValue> {
@@ -371,6 +454,65 @@ export class AgentBridge {
     return true;
   }
 
+  private async attemptCall(
+    adapter: AgentRuntimeAdapter,
+    runtime: string,
+    routedRequest: BridgeRequest,
+    traceId: string,
+    startedAt: number,
+    principal?: Principal
+  ): Promise<{ done: boolean; response: BridgeResponse }> {
+    let response: BridgeResponse = createErrorResponse({
+      id: routedRequest.id,
+      code: BRIDGE_ERROR_CODES.internalError,
+      message: "Adapter call failed."
+    });
+
+    for (let attempt = 1; attempt <= this.maxAttempts; attempt += 1) {
+      const active = this.createCallController(routedRequest, traceId);
+      const callRequest = createAdapterCallRequest(routedRequest);
+      const context = this.createAdapterContext(routedRequest, runtime, traceId, principal, active.signal);
+      const limiter = this.runtimeLimiter(runtime);
+
+      try {
+        const result = await this.runLimited(active.signal, limiter, () => adapter.call(callRequest, context));
+        response = createSuccessResponse(routedRequest, toJsonValue(result));
+        if ("result" in response) {
+          this.indexResourcesFromValue(response.result, routedRequest, runtime, traceId);
+        }
+        this.health.recordSuccess(runtime);
+        this.recordAudit(routedRequest, runtime, traceId, startedAt, response, principal);
+        return { done: true, response };
+      } catch (error) {
+        const aborted = active.signal.aborted;
+        response = this.errorResponseFromAdapterError(routedRequest, error, "Adapter call failed.");
+        this.logger?.error("Adapter call failed.", {
+          runtime,
+          method: routedRequest.method,
+          attempt,
+          error
+        });
+        this.recordAudit(routedRequest, runtime, traceId, startedAt, response, principal);
+
+        // Aborts are user cancellations or bridge timeouts: never retry or fail over.
+        if (aborted) return { done: true, response };
+
+        const code = "error" in response ? response.error.code : undefined;
+        if (isServerFailure(code)) this.health.recordFailure(runtime);
+        if (isRetryable(code) && attempt < this.maxAttempts) {
+          await delay(this.retryBackoffMs * attempt);
+          continue;
+        }
+        // Exhausted retries on this runtime; allow the caller to fail over.
+        return { done: false, response };
+      } finally {
+        active.dispose();
+      }
+    }
+
+    return { done: false, response };
+  }
+
   private recordAudit(
     request: BridgeRequest,
     runtime: string,
@@ -422,6 +564,81 @@ export class AgentBridge {
 
       return [];
     });
+  }
+
+  /**
+   * Resolve a request to an ordered list of candidate runtimes.
+   * - capability-only requests fan out to all matching runtimes, health-first;
+   * - runtime/session requests resolve to a single sticky candidate.
+   */
+  private async planTargets(request: BridgeRequest): Promise<RuntimePlan> {
+    const capability = normalizeNonEmptyString(request.capability);
+    const explicitRuntime = normalizeNonEmptyString(request.runtime);
+    const sessionId = normalizeNonEmptyString(request.session?.id);
+
+    if (capability && !explicitRuntime && !sessionId) {
+      const candidates = await this.candidatesForCapability(capability);
+      if (candidates.length === 0) {
+        return {
+          error: {
+            code: BRIDGE_ERROR_CODES.runtimeNotFound,
+            message: `No runtime provides capability '${capability}'.`,
+            data: { capability }
+          }
+        };
+      }
+      return { candidates, request: { ...request } };
+    }
+
+    const resolved = this.resolveRuntimeRequest(request);
+    if ("error" in resolved) return resolved;
+    return { candidates: [resolved.runtime], request: resolved.request };
+  }
+
+  private async candidatesForCapability(capability: string): Promise<string[]> {
+    const matches: string[] = [];
+    for (const adapter of this.registry.list()) {
+      const caps = await this.getCapabilities(adapter);
+      if (capabilityMatches(caps, capability)) matches.push(adapter.info.id);
+    }
+    return this.orderByHealth(capability, matches);
+  }
+
+  private async getCapabilities(adapter: AgentRuntimeAdapter): Promise<RuntimeCapabilities> {
+    const cached = this.capabilityCache.get(adapter.info.id);
+    if (cached) return cached;
+    const caps = await adapter.capabilities();
+    this.capabilityCache.set(adapter.info.id, caps);
+    return caps;
+  }
+
+  private orderByHealth(key: string, runtimes: string[]): string[] {
+    const available = runtimes.filter((runtime) => this.health.isAvailable(runtime));
+    const unavailable = runtimes.filter((runtime) => !this.health.isAvailable(runtime));
+    return [...this.rotate(key, available), ...unavailable];
+  }
+
+  private rotate(key: string, list: string[]): string[] {
+    if (list.length <= 1) return list;
+    const offset = (this.roundRobin.get(key) ?? 0) % list.length;
+    this.roundRobin.set(key, offset + 1);
+    return [...list.slice(offset), ...list.slice(0, offset)];
+  }
+
+  private async probeHealth(adapter: AgentRuntimeAdapter): Promise<{ circuit: JsonValue; reported: JsonValue }> {
+    const circuit = this.health.snapshot(adapter.info.id) as unknown as JsonValue;
+    let reported: JsonValue = null;
+    if (adapter.health) {
+      try {
+        reported = toJsonValue(await adapter.health());
+      } catch (error) {
+        reported = {
+          status: "down",
+          details: { error: error instanceof Error ? error.message : String(error) }
+        };
+      }
+    }
+    return { circuit, reported };
   }
 
   private resolveRuntimeRequest(request: BridgeRequest): RuntimeResolution {
@@ -661,6 +878,10 @@ type RuntimeResolution =
   | { runtime: string; request: BridgeRequest & { runtime: string } }
   | { runtime?: string; error: { code: number; message: string; data?: JsonValue } };
 
+type RuntimePlan =
+  | { candidates: string[]; request: BridgeRequest }
+  | { runtime?: string; error: { code: number; message: string; data?: JsonValue } };
+
 interface ActiveBridgeCall {
   id: string;
   controller: AbortController;
@@ -732,6 +953,83 @@ class ConcurrencyLimiter {
 
 interface LimiterWaiter {
   release(): void;
+}
+
+/**
+ * Per-runtime circuit breaker. Consecutive failures open the circuit; after a
+ * cooldown the breaker allows a single half-open trial. Success closes it.
+ */
+class RuntimeHealthTracker {
+  private readonly states = new Map<string, { failures: number; openedAt?: number }>();
+  private readonly failureThreshold: number;
+  private readonly cooldownMs: number;
+
+  constructor(options: CircuitBreakerOptions = {}) {
+    this.failureThreshold = normalizePositiveNumber(options.failureThreshold) ?? 5;
+    this.cooldownMs = normalizePositiveNumber(options.cooldownMs) ?? 30_000;
+  }
+
+  isAvailable(runtime: string): boolean {
+    const state = this.states.get(runtime);
+    if (!state || state.openedAt === undefined) return true;
+    return Date.now() - state.openedAt >= this.cooldownMs;
+  }
+
+  recordSuccess(runtime: string): void {
+    this.states.set(runtime, { failures: 0 });
+  }
+
+  recordFailure(runtime: string): void {
+    const state = this.states.get(runtime) ?? { failures: 0 };
+    state.failures += 1;
+    if (state.failures >= this.failureThreshold) {
+      state.openedAt = Date.now();
+    }
+    this.states.set(runtime, state);
+  }
+
+  snapshot(runtime: string): { state: "closed" | "open" | "half_open"; failures: number } {
+    const state = this.states.get(runtime);
+    if (!state || state.openedAt === undefined) {
+      return { state: "closed", failures: state?.failures ?? 0 };
+    }
+    if (Date.now() - state.openedAt >= this.cooldownMs) {
+      return { state: "half_open", failures: state.failures };
+    }
+    return { state: "open", failures: state.failures };
+  }
+}
+
+function capabilityMatches(caps: RuntimeCapabilities, capability: string): boolean {
+  const entry = caps[capability];
+  if (entry !== undefined) {
+    return entry !== false;
+  }
+  // Fall back to matching a specific method name declared inside a descriptor.
+  return Object.values(caps).some(
+    (value) =>
+      typeof value === "object" &&
+      value !== null &&
+      Array.isArray(value.methods) &&
+      value.methods.includes(capability)
+  );
+}
+
+function isRetryable(code?: number): boolean {
+  return code === BRIDGE_ERROR_CODES.adapterUnavailable || code === BRIDGE_ERROR_CODES.internalError;
+}
+
+function isServerFailure(code?: number): boolean {
+  return (
+    code === BRIDGE_ERROR_CODES.adapterUnavailable ||
+    code === BRIDGE_ERROR_CODES.internalError ||
+    code === BRIDGE_ERROR_CODES.timeout
+  );
+}
+
+function delay(ms: number): Promise<void> {
+  if (!(ms > 0)) return Promise.resolve();
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function createAdapterCallRequest(request: BridgeRequest): AdapterCallRequest {

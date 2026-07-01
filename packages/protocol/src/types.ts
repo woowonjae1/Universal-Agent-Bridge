@@ -22,6 +22,7 @@ export interface BridgeRequest {
   jsonrpc: "2.0";
   id?: BridgeRequestId;
   runtime?: string;
+  capability?: string;
   session?: BridgeSessionRef;
   method: string;
   params?: JsonValue;

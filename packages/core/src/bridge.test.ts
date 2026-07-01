@@ -470,3 +470,128 @@ test("times out queued calls without consuming concurrency slots", async () => {
   assert.equal(bridge.cancel("queue_blocking"), true);
   await blocking;
 });
+
+function chatAdapter(id: string, handler: (method: string) => unknown): AgentRuntimeAdapter {
+  return {
+    info: { id, name: id },
+    capabilities() {
+      return { chat: { write: true, methods: ["chat.send"] } };
+    },
+    call(request) {
+      return handler(request.method);
+    }
+  };
+}
+
+test("capability routing dispatches to a runtime advertising the capability", async () => {
+  const bridge = new AgentBridge();
+  bridge.register(chatAdapter("alpha", () => ({ from: "alpha" })));
+
+  const response = await bridge.handleRequest({
+    jsonrpc: "2.0",
+    id: "cap_1",
+    capability: "chat",
+    method: "chat.send",
+    params: { text: "hi" }
+  });
+
+  assert.deepEqual("result" in response ? response.result : undefined, { from: "alpha" });
+});
+
+test("capability routing fails over from an unavailable runtime to a healthy one", async () => {
+  const bridge = new AgentBridge();
+  // First registered → first in the initial round-robin order, and it fails.
+  bridge.register(chatAdapter("broken", () => {
+    throw { code: -32004, message: "runtime down" };
+  }));
+  bridge.register(chatAdapter("healthy", () => ({ from: "healthy" })));
+
+  const response = await bridge.handleRequest({
+    jsonrpc: "2.0",
+    id: "cap_failover",
+    capability: "chat",
+    method: "chat.send"
+  });
+
+  assert.deepEqual("result" in response ? response.result : undefined, { from: "healthy" });
+});
+
+test("capability routing returns runtimeNotFound when no runtime matches", async () => {
+  const bridge = new AgentBridge();
+  bridge.register(chatAdapter("alpha", () => ({})));
+
+  const response = await bridge.handleRequest({
+    jsonrpc: "2.0",
+    id: "cap_missing",
+    capability: "video",
+    method: "video.render"
+  });
+
+  assert.equal("error" in response ? response.error.code : undefined, -32001);
+});
+
+test("circuit breaker opens after repeated failures and fast-fails", async () => {
+  let calls = 0;
+  const bridge = new AgentBridge({ circuitBreaker: { failureThreshold: 2, cooldownMs: 60_000 } });
+  bridge.register({
+    info: { id: "flaky", name: "flaky" },
+    capabilities() {
+      return { system: { read: true } };
+    },
+    call() {
+      calls += 1;
+      throw { code: -32004, message: "down" };
+    }
+  });
+
+  const request = { jsonrpc: "2.0" as const, runtime: "flaky", method: "system.ping" };
+  await bridge.handleRequest({ ...request, id: "cb_1" });
+  await bridge.handleRequest({ ...request, id: "cb_2" });
+  const third = await bridge.handleRequest({ ...request, id: "cb_3" });
+
+  assert.equal(calls, 2, "adapter should not be invoked once the circuit is open");
+  assert.equal("error" in third ? third.error.code : undefined, -32004);
+  assert.match("error" in third ? third.error.message : "", /circuit open/);
+});
+
+test("retry recovers a transient failure within the same runtime", async () => {
+  let calls = 0;
+  const bridge = new AgentBridge({ maxAttempts: 2, retryBackoffMs: 1 });
+  bridge.register({
+    info: { id: "transient", name: "transient" },
+    capabilities() {
+      return { system: { read: true } };
+    },
+    call() {
+      calls += 1;
+      if (calls === 1) throw { code: -32004, message: "warming up" };
+      return { ok: true };
+    }
+  });
+
+  const response = await bridge.handleRequest({
+    jsonrpc: "2.0",
+    id: "retry_1",
+    runtime: "transient",
+    method: "system.ping"
+  });
+
+  assert.equal(calls, 2);
+  assert.deepEqual("result" in response ? response.result : undefined, { ok: true });
+});
+
+test("broadcast fans out to every runtime advertising the capability", async () => {
+  const bridge = new AgentBridge();
+  bridge.register(chatAdapter("alpha", () => ({ from: "alpha" })));
+  bridge.register(chatAdapter("beta", () => ({ from: "beta" })));
+
+  const result = await bridge.broadcast("chat", {
+    jsonrpc: "2.0",
+    id: "bc_1",
+    method: "chat.send"
+  }) as { capability: string; results: Array<{ runtime: string }> };
+
+  assert.equal(result.capability, "chat");
+  assert.equal(result.results.length, 2);
+  assert.deepEqual(result.results.map((entry) => entry.runtime).sort(), ["alpha", "beta"]);
+});

@@ -36,7 +36,8 @@ export function isBridgeRequest(value: unknown): value is BridgeRequest {
   if (value.jsonrpc !== "2.0") return false;
   if (value.id !== undefined && !isBridgeRequestId(value.id)) return false;
   if (value.runtime !== undefined && (typeof value.runtime !== "string" || value.runtime.trim() === "")) return false;
-  if (value.runtime === undefined && !isBridgeSessionRef(value.session)) return false;
+  if (value.capability !== undefined && (typeof value.capability !== "string" || value.capability.trim() === "")) return false;
+  if (value.runtime === undefined && value.capability === undefined && !isBridgeSessionRef(value.session)) return false;
   if (value.session !== undefined && !isBridgeSessionRef(value.session)) return false;
   if (typeof value.method !== "string" || value.method.trim() === "") return false;
   if (value.params !== undefined && !isJsonValue(value.params)) return false;
