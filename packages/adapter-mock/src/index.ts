@@ -234,13 +234,38 @@ export function createMockAdapter(options: MockAdapterOptions = {}): AgentRuntim
         case "memory.listFiles":
           return {
             files: [
-              { path: "memory/project.md", sizeBytes: 128 },
-              { path: "memory/preferences.md", sizeBytes: 64 }
+              {
+                id: "memory_project",
+                kind: "memory",
+                path: "memory/project.md",
+                name: "Project memory",
+                mimeType: "text/markdown",
+                sizeBytes: 128
+              },
+              {
+                id: "memory_preferences",
+                kind: "memory",
+                path: "memory/preferences.md",
+                name: "Preferences memory",
+                mimeType: "text/markdown",
+                sizeBytes: 64
+              }
             ]
           };
         case "artifacts.list":
           return {
-            artifacts: []
+            artifacts: [
+              {
+                id: "artifact_demo",
+                kind: "artifact",
+                name: "Demo artifact",
+                mimeType: "application/json",
+                sizeBytes: 32,
+                metadata: {
+                  status: "ready"
+                }
+              }
+            ]
           };
         case "skills.listInstalled":
           return {

@@ -25,7 +25,9 @@ export interface AuditLogSnapshot {
 export class AuditLog {
   private readonly entries: AuditLogEntry[] = [];
 
-  constructor(private readonly limit = 200) {}
+  constructor(private readonly limit = 200, initialEntries: AuditLogEntry[] = []) {
+    this.entries = initialEntries.slice(0, this.limit);
+  }
 
   record(entry: AuditLogEntry): void {
     this.entries.unshift(entry);
@@ -45,5 +47,8 @@ export class AuditLog {
   toJson(limit = 50): JsonValue {
     return JSON.parse(JSON.stringify(this.list(limit))) as JsonValue;
   }
-}
 
+  snapshot(): AuditLogEntry[] {
+    return [...this.entries];
+  }
+}

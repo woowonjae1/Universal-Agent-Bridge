@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtemp, readFile } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import test from "node:test";
 import { AgentBridge, ScopeAccessPolicy } from "./index.js";
 import type { AgentRuntimeAdapter } from "@uab/adapter-sdk";
@@ -125,6 +128,57 @@ test("lists runtime method catalog", async () => {
   assert.equal(catalog.runtimes[0].methods[0].name, "system.ping");
 });
 
+test("indexes memory and artifact resources from adapter responses", async () => {
+  const bridge = new AgentBridge();
+  bridge.register({
+    ...adapter,
+    call(request) {
+      if (request.method === "memory.listFiles") {
+        return {
+          files: [
+            { id: "mem_1", kind: "memory", path: "memory/project.md", sizeBytes: 128 }
+          ]
+        };
+      }
+      return {
+        artifacts: [
+          { artifact_id: "art_1", title: "Plan", mimeType: "text/markdown" }
+        ]
+      };
+    }
+  });
+
+  await bridge.handleRequest({
+    jsonrpc: "2.0",
+    id: "resource_memory",
+    runtime: "test",
+    method: "memory.listFiles",
+    session: { id: "resource_session" },
+    meta: { traceId: "trace_resources" }
+  });
+  await bridge.handleRequest({
+    jsonrpc: "2.0",
+    id: "resource_artifact",
+    runtime: "test",
+    method: "artifacts.list",
+    session: { id: "resource_session" },
+    meta: { traceId: "trace_resources" }
+  });
+
+  const resources = bridge.listResources({ sessionId: "resource_session" }) as {
+    resources: Array<{ kind: string; runtime: string; traceId: string; name?: string }>;
+  };
+  assert.deepEqual(resources.resources.map((resource) => resource.kind).sort(), ["artifact", "memory"]);
+  assert.equal(resources.resources[0].runtime, "test");
+
+  const trace = bridge.getTrace("trace_resources") as {
+    audit: unknown[];
+    resources: Array<{ kind: string }>;
+  };
+  assert.equal(trace.audit.length, 2);
+  assert.equal(trace.resources.length, 2);
+});
+
 test("binds sessions to runtimes and reuses sticky routing", async () => {
   const seen: Array<{ runtime: string | undefined; session: string | undefined }> = [];
   const bridge = new AgentBridge();
@@ -162,6 +216,50 @@ test("binds sessions to runtimes and reuses sticky routing", async () => {
     runtime: "test",
     session: "session_1"
   });
+});
+
+test("persists sessions audit and resources to a JSON store", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "uab-state-"));
+  const statePath = join(dir, "state.json");
+  const first = new AgentBridge({ persistencePath: statePath });
+  first.register({
+    ...adapter,
+    call() {
+      return {
+        artifacts: [
+          { id: "artifact_persisted", kind: "artifact", name: "Persisted artifact" }
+        ]
+      };
+    }
+  });
+
+  await first.handleRequest({
+    jsonrpc: "2.0",
+    id: "persist_req",
+    runtime: "test",
+    session: { id: "persist_session" },
+    method: "artifacts.list",
+    meta: { traceId: "trace_persist" }
+  });
+
+  const persisted = JSON.parse(await readFile(statePath, "utf8")) as {
+    sessions: unknown[];
+    audit: unknown[];
+    resources: unknown[];
+  };
+  assert.equal(persisted.sessions.length, 1);
+  assert.equal(persisted.audit.length, 1);
+  assert.equal(persisted.resources.length, 1);
+
+  const second = new AgentBridge({ persistencePath: statePath });
+  const sessions = second.listSessions() as { sessions: Array<{ id: string; runtime: string }> };
+  const resources = second.listResources({ kind: "artifact" }) as { resources: Array<{ id: string }> };
+  const trace = second.getTrace("trace_persist") as { audit: unknown[]; resources: unknown[] };
+
+  assert.deepEqual(sessions.sessions.map((session) => session.id), ["persist_session"]);
+  assert.equal(resources.resources[0].id, "artifact:test:persist_session:artifact_persisted");
+  assert.equal(trace.audit.length, 1);
+  assert.equal(trace.resources.length, 1);
 });
 
 test("rejects switching an existing session to another runtime", async () => {
@@ -324,6 +422,14 @@ test("limits concurrent calls globally", async () => {
   ]);
 
   assert.equal(maxActive, 1);
+  const metrics = bridge.metrics() as {
+    calls: number;
+    errors: number;
+    runtimes: Array<{ runtime: string; calls: number }>;
+  };
+  assert.equal(metrics.calls, 2);
+  assert.equal(metrics.errors, 0);
+  assert.equal(metrics.runtimes[0].runtime, "test");
 });
 
 test("times out queued calls without consuming concurrency slots", async () => {

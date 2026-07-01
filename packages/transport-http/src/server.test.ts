@@ -301,6 +301,57 @@ test("HTTP transport exposes bridge session bindings", async () => {
   }
 });
 
+test("HTTP transport exposes resources metrics and trace snapshots", async () => {
+  const bridge = new AgentBridge({
+    adapters: [{
+      ...adapter,
+      call() {
+        return {
+          artifacts: [
+            { id: "art_http", kind: "artifact", name: "HTTP artifact" }
+          ]
+        };
+      }
+    }]
+  });
+  const server = createHttpBridgeServer({ bridge });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+
+  try {
+    const port = readPort(server);
+    await fetch(`http://127.0.0.1:${port}/rpc`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: "http_resource",
+        runtime: "test",
+        session: { id: "http_resource_session" },
+        method: "artifacts.list",
+        meta: { traceId: "trace_http_resource" },
+        params: {}
+      })
+    });
+
+    const resourcesResponse = await fetch(`http://127.0.0.1:${port}/resources?kind=artifact&sessionId=http_resource_session`);
+    const resources = await resourcesResponse.json() as { resources: Array<{ id: string; kind: string }> };
+    const metricsResponse = await fetch(`http://127.0.0.1:${port}/metrics`);
+    const metrics = await metricsResponse.json() as { calls: number; runtimes: Array<{ runtime: string }> };
+    const traceResponse = await fetch(`http://127.0.0.1:${port}/traces/trace_http_resource`);
+    const trace = await traceResponse.json() as { audit: unknown[]; resources: unknown[] };
+
+    assert.equal(resources.resources.length, 1);
+    assert.equal(resources.resources[0].kind, "artifact");
+    assert.equal(metrics.calls, 1);
+    assert.equal(metrics.runtimes[0].runtime, "test");
+    assert.equal(trace.audit.length, 1);
+    assert.equal(trace.resources.length, 1);
+  } finally {
+    await close(server);
+  }
+});
+
 test("HTTP transport cancels active RPC requests", async () => {
   const bridge = new AgentBridge({
     adapters: [{

@@ -79,6 +79,27 @@ export function createHttpBridgeServer(options: HttpBridgeServerOptions): Server
         return;
       }
 
+      if (request.method === "GET" && url.pathname === "/resources") {
+        sendJson(response, 200, options.bridge.listResources({
+          kind: readResourceKind(url.searchParams.get("kind")),
+          runtime: url.searchParams.get("runtime") ?? undefined,
+          sessionId: url.searchParams.get("sessionId") ?? url.searchParams.get("session") ?? undefined,
+          limit: readNumber(url.searchParams.get("limit"))
+        }));
+        return;
+      }
+
+      if (request.method === "GET" && url.pathname === "/metrics") {
+        sendJson(response, 200, options.bridge.metrics());
+        return;
+      }
+
+      if (request.method === "GET" && url.pathname.startsWith("/traces/")) {
+        const traceId = decodeURIComponent(url.pathname.slice("/traces/".length));
+        sendJson(response, 200, options.bridge.getTrace(traceId));
+        return;
+      }
+
       if (request.method === "POST" && url.pathname === "/cancel") {
         const payload = await readJsonBody(request, maxBodyBytes);
         const requestId = readCancelRequestId(payload);
@@ -308,6 +329,17 @@ function readCancelRequestId(payload: unknown): string {
   if (typeof value === "string" && value.trim() !== "") return value.trim();
   if (typeof value === "number" && Number.isFinite(value)) return String(value);
   throw new Error("Cancel request requires requestId.");
+}
+
+function readResourceKind(value: string | null): "memory" | "artifact" | undefined {
+  if (value === "memory" || value === "artifact") return value;
+  return undefined;
+}
+
+function readNumber(value: string | null): number | undefined {
+  if (!value) return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

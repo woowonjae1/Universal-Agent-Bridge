@@ -41,7 +41,11 @@ async function main(argv: string[]): Promise<void> {
 }
 
 function createDemoBridge(): AgentBridge {
-  const bridge = new AgentBridge();
+  const bridge = new AgentBridge({
+    auditLimit: readEnvNumber("UAB_AUDIT_LIMIT", 200),
+    resourceLimit: readEnvNumber("UAB_RESOURCE_LIMIT", 500),
+    persistencePath: process.env.UAB_STATE_PATH
+  });
   bridge.register(createMockAdapter());
   registerHttpRuntimeFromEnv(bridge);
   registerHermesRuntimeFromEnv(bridge);

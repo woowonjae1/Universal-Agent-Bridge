@@ -21,7 +21,15 @@ import type {
   JsonValue
 } from "@uab/protocol";
 import { AdapterRegistry } from "./adapter-registry.js";
-import { AuditLog } from "./audit-log.js";
+import { AuditLog, type AuditLogEntry } from "./audit-log.js";
+import { BridgeObservability, type BridgeTraceSnapshot } from "./observability.js";
+import { JsonBridgeStore, type StoredBridgeSession } from "./persistent-store.js";
+import {
+  BridgeResourceIndex,
+  extractBridgeResources,
+  type BridgeResource,
+  type BridgeResourceFilter
+} from "./resources.js";
 import { AllowAllAccessPolicy, type AccessPolicy } from "./scope-policy.js";
 
 export interface AgentBridgeOptions {
@@ -32,11 +40,15 @@ export interface AgentBridgeOptions {
   defaultTimeoutMs?: number;
   maxConcurrentCalls?: number;
   runtimeConcurrency?: Record<string, number>;
+  persistencePath?: string;
+  resourceLimit?: number;
 }
 
 export class AgentBridge {
   readonly registry = new AdapterRegistry();
   readonly audit: AuditLog;
+  readonly resources: BridgeResourceIndex;
+  readonly observability = new BridgeObservability();
   private readonly accessPolicy: AccessPolicy;
   private readonly logger?: BridgeLogger;
   private readonly sessionBindings = new Map<string, BridgeSessionBinding>();
@@ -45,11 +57,18 @@ export class AgentBridge {
   private readonly runtimeLimiters = new Map<string, ConcurrencyLimiter>();
   private readonly defaultTimeoutMs?: number;
   private readonly runtimeConcurrency: Record<string, number>;
+  private readonly store?: JsonBridgeStore;
 
   constructor(options: AgentBridgeOptions = {}) {
+    this.store = options.persistencePath ? new JsonBridgeStore(options.persistencePath) : undefined;
+    const snapshot = this.store?.load();
+    for (const session of snapshot?.sessions ?? []) {
+      this.sessionBindings.set(session.id, session);
+    }
     this.accessPolicy = options.accessPolicy ?? new AllowAllAccessPolicy();
     this.logger = options.logger;
-    this.audit = new AuditLog(options.auditLimit);
+    this.audit = new AuditLog(options.auditLimit, snapshot?.audit);
+    this.resources = new BridgeResourceIndex(snapshot?.resources, options.resourceLimit);
     this.defaultTimeoutMs = normalizePositiveNumber(options.defaultTimeoutMs);
     this.runtimeConcurrency = options.runtimeConcurrency ?? {};
     this.globalLimiter = new ConcurrencyLimiter(options.maxConcurrentCalls);
@@ -81,6 +100,7 @@ export class AgentBridge {
   async call(request: BridgeRequest, principal?: Principal): Promise<BridgeResponse> {
     const startedAt = Date.now();
     const traceId = request.meta?.traceId ?? `trace_${Date.now().toString(36)}`;
+    this.observability.callStarted();
     const resolved = this.resolveRuntimeRequest(request);
     if ("error" in resolved) {
       const response = createErrorResponse({
@@ -129,6 +149,9 @@ export class AgentBridge {
     try {
       const result = await this.runLimited(active.signal, limiter, () => adapter.call(callRequest, context));
       const response = createSuccessResponse(routedRequest, toJsonValue(result));
+      if ("result" in response) {
+        this.indexResourcesFromValue(response.result, routedRequest, runtime, traceId);
+      }
       this.recordAudit(routedRequest, runtime, traceId, startedAt, response, principal);
       return response;
     } catch (error) {
@@ -151,6 +174,7 @@ export class AgentBridge {
   ): AsyncIterable<AdapterStreamEvent> {
     const startedAt = Date.now();
     const traceId = request.meta?.traceId ?? `trace_${Date.now().toString(36)}`;
+    this.observability.callStarted();
     const resolved = this.resolveRuntimeRequest(request);
     if ("error" in resolved) {
       const response = createErrorResponse({
@@ -233,6 +257,7 @@ export class AgentBridge {
             if (event.type === "result") {
               finalResult = event.data;
             }
+            this.indexResourcesFromStreamEvent(event, routedRequest, runtime, traceId);
             yield event;
           }
         } catch (error) {
@@ -251,6 +276,7 @@ export class AgentBridge {
       );
       const resultJson = toJsonValue(result);
       const response = createSuccessResponse(routedRequest, resultJson);
+      this.indexResourcesFromValue(resultJson, routedRequest, runtime, traceId);
       this.recordAudit(routedRequest, runtime, traceId, startedAt, response, principal);
       yield {
         type: "result",
@@ -321,6 +347,23 @@ export class AgentBridge {
     });
   }
 
+  listResources(filter: BridgeResourceFilter = {}): JsonValue {
+    return this.resources.toJson(filter);
+  }
+
+  metrics(): JsonValue {
+    return this.observability.toJson(this.concurrencySnapshot());
+  }
+
+  getTrace(traceId: string): JsonValue {
+    const trace: BridgeTraceSnapshot = {
+      traceId,
+      audit: this.audit.snapshot().filter((entry) => entry.traceId === traceId),
+      resources: this.resources.snapshot().filter((resource) => resource.traceId === traceId)
+    };
+    return toJsonValue(trace);
+  }
+
   cancel(requestId: string): boolean {
     const call = this.activeCalls.get(requestId);
     if (!call) return false;
@@ -337,7 +380,7 @@ export class AgentBridge {
     principal?: Principal
   ): void {
     const error = "error" in response ? response.error : undefined;
-    this.audit.record({
+    const entry: AuditLogEntry = {
       id: `audit_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
       requestId: request.id ?? null,
       traceId,
@@ -350,7 +393,10 @@ export class AgentBridge {
       principalId: principal?.id,
       source: typeof request.meta?.source === "string" ? request.meta.source : undefined,
       timestamp: new Date().toISOString()
-    });
+    };
+    this.audit.record(entry);
+    this.observability.callFinished(entry);
+    this.persistState();
   }
 
   private async getAdapterMethods(
@@ -436,6 +482,7 @@ export class AgentBridge {
       metadata: request.session?.metadata ?? existing?.metadata
     };
     this.sessionBindings.set(sessionId, binding);
+    this.persistState();
 
     return {
       runtime,
@@ -503,6 +550,64 @@ export class AgentBridge {
     const limiter = new ConcurrencyLimiter(this.runtimeConcurrency[runtime]);
     this.runtimeLimiters.set(runtime, limiter);
     return limiter;
+  }
+
+  private indexResourcesFromValue(
+    value: JsonValue,
+    request: BridgeRequest,
+    runtime: string,
+    traceId: string
+  ): void {
+    const resources = extractBridgeResources(value, {
+      runtime,
+      method: request.method,
+      requestId: request.id ?? null,
+      traceId,
+      sessionId: request.session?.id,
+      timestamp: new Date().toISOString()
+    });
+    if (resources.length === 0) return;
+    for (const resource of resources) {
+      this.resources.upsert(resource);
+    }
+  }
+
+  private indexResourcesFromStreamEvent(
+    event: AdapterStreamEvent,
+    request: BridgeRequest,
+    runtime: string,
+    traceId: string
+  ): void {
+    if (event.type !== "artifact" && event.type !== "custom") return;
+    const data = event.type === "artifact" ? event.data : event.data;
+    if (data === undefined) return;
+    this.indexResourcesFromValue(toJsonValue(data), request, runtime, traceId);
+  }
+
+  private concurrencySnapshot(): Record<string, { active: number; queued: number; max: number | null }> {
+    const snapshot: Record<string, { active: number; queued: number; max: number | null }> = {};
+    snapshot.global = this.globalLimiter.snapshot();
+    for (const [runtime, limiter] of this.runtimeLimiters.entries()) {
+      snapshot[runtime] = limiter.snapshot();
+    }
+    return snapshot;
+  }
+
+  private persistState(): void {
+    if (!this.store) return;
+    try {
+      this.store.save({
+        version: 1,
+        sessions: [...this.sessionBindings.values()].map(toStoredSession),
+        audit: this.audit.snapshot(),
+        resources: this.resources.snapshot(),
+        updatedAt: new Date().toISOString()
+      });
+    } catch (error) {
+      this.logger?.warn("Failed to persist bridge state.", {
+        error
+      });
+    }
   }
 
   private async runLimited<T>(
@@ -615,6 +720,14 @@ class ConcurrencyLimiter {
     const next = this.queue.shift();
     if (next) next.release();
   }
+
+  snapshot(): { active: number; queued: number; max: number | null } {
+    return {
+      active: this.active,
+      queued: this.queue.length,
+      max: Number.isFinite(this.max) ? this.max : null
+    };
+  }
 }
 
 interface LimiterWaiter {
@@ -641,6 +754,16 @@ function normalizeNonEmptyString(value: unknown): string | undefined {
 function toJsonValue(value: unknown): JsonValue {
   if (value === undefined) return null;
   return JSON.parse(JSON.stringify(value)) as JsonValue;
+}
+
+function toStoredSession(session: BridgeSessionBinding): StoredBridgeSession {
+  return {
+    id: session.id,
+    runtime: session.runtime,
+    createdAt: session.createdAt,
+    updatedAt: session.updatedAt,
+    metadata: session.metadata
+  };
 }
 
 function raceWithSignal<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
