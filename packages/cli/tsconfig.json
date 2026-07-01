@@ -14,6 +14,7 @@
     { "path": "../adapter-hermes" },
     { "path": "../adapter-openclaw" },
     { "path": "../mcp" },
+    { "path": "../a2a" },
     { "path": "../transport-http" }
   ]
 }

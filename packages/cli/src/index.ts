@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createA2aAdapter, readA2aAgentConfigsFromEnv } from "@uab/a2a";
 import { createHermesAdapter } from "@uab/adapter-hermes";
 import { createHttpJsonRpcAdapter } from "@uab/adapter-http-jsonrpc";
 import { createMockAdapter } from "@uab/adapter-mock";
@@ -40,6 +41,7 @@ function createDemoBridge(): AgentBridge {
   registerHermesRuntimeFromEnv(bridge);
   registerOpenClawRuntimeFromEnv(bridge);
   registerMcpRuntimeFromEnv(bridge);
+  registerA2aRuntimeFromEnv(bridge);
   return bridge;
 }
 
@@ -173,6 +175,19 @@ function registerMcpRuntimeFromEnv(bridge: AgentBridge): void {
   );
 }
 
+function registerA2aRuntimeFromEnv(bridge: AgentBridge): void {
+  const agents = readA2aAgentConfigsFromEnv(process.env);
+  if (agents.length === 0) return;
+
+  bridge.register(
+    createA2aAdapter({
+      id: process.env.UAB_A2A_RUNTIME_ID ?? "a2a",
+      name: process.env.UAB_A2A_RUNTIME_NAME ?? "A2A Agent Layer",
+      agents
+    })
+  );
+}
+
 function readEnvNumber(name: string, fallback: number): number {
   const value = process.env[name];
   if (!value) return fallback;
@@ -229,6 +244,9 @@ MCP stdio server:
 
 MCP HTTP server:
   UAB_MCP_SERVER_TRANSPORT=http UAB_MCP_SERVER_URL=http://127.0.0.1:3000/mcp uab serve
+
+A2A agent:
+  UAB_A2A_AGENT_URL=http://127.0.0.1:9010 uab serve
 `);
 }
 

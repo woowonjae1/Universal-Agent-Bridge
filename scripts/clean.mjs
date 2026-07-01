@@ -10,6 +10,8 @@ const targets = [
   "packages/ag-ui/tsconfig.tsbuildinfo",
   "packages/mcp/dist",
   "packages/mcp/tsconfig.tsbuildinfo",
+  "packages/a2a/dist",
+  "packages/a2a/tsconfig.tsbuildinfo",
   "packages/adapter-sdk/dist",
   "packages/adapter-sdk/tsconfig.tsbuildinfo",
   "packages/core/dist",

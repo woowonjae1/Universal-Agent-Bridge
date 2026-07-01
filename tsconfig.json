@@ -4,6 +4,7 @@
     { "path": "./packages/protocol" },
     { "path": "./packages/ag-ui" },
     { "path": "./packages/mcp" },
+    { "path": "./packages/a2a" },
     { "path": "./packages/adapter-sdk" },
     { "path": "./packages/core" },
     { "path": "./packages/adapter-mock" },

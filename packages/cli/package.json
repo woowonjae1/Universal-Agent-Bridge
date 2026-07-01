@@ -20,6 +20,7 @@
     "serve": "node ./dist/index.js serve"
   },
   "dependencies": {
+    "@uab/a2a": "file:../a2a",
     "@uab/adapter-hermes": "file:../adapter-hermes",
     "@uab/adapter-http-jsonrpc": "file:../adapter-http-jsonrpc",
     "@uab/adapter-mock": "file:../adapter-mock",

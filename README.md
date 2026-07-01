@@ -27,6 +27,7 @@ This repository starts with a working v0.1 foundation:
 - `@uab/protocol`: JSON-RPC style bridge envelope, responses, and error codes.
 - `@uab/ag-ui`: AG-UI event mapping for frontend and app clients.
 - `@uab/mcp`: MCP server registry and tool invocation layer.
+- `@uab/a2a`: A2A remote agent registry and JSON-RPC client layer.
 - `@uab/adapter-sdk`: runtime adapter contract and shared capability types.
 - `@uab/core`: adapter registry, request router, and scoped access policy.
 - `@uab/adapter-mock`: in-memory adapter for demos and tests.
@@ -130,6 +131,23 @@ curl -X POST http://127.0.0.1:8787/rpc ^
   -d "{\"jsonrpc\":\"2.0\",\"id\":\"mcp_call\",\"runtime\":\"mcp\",\"method\":\"mcp.tools.call\",\"params\":{\"serverId\":\"example\",\"name\":\"echo\",\"arguments\":{\"text\":\"hello\"}}}"
 ```
 
+Register an A2A agent:
+
+```bash
+npm run example:a2a -- --port 9010
+$env:UAB_A2A_AGENT_ID="example"
+$env:UAB_A2A_AGENT_URL="http://127.0.0.1:9010"
+npm run serve -- --port 8787
+```
+
+Send a message through A2A:
+
+```bash
+curl -X POST http://127.0.0.1:8787/rpc ^
+  -H "content-type: application/json" ^
+  -d "{\"jsonrpc\":\"2.0\",\"id\":\"a2a_send\",\"runtime\":\"a2a\",\"method\":\"a2a.message.send\",\"params\":{\"agentId\":\"example\",\"text\":\"hello\"}}"
+```
+
 ## Request Shape
 
 ```json
@@ -149,6 +167,7 @@ packages/
   protocol/
   ag-ui/
   mcp/
+  a2a/
   adapter-sdk/
   core/
   adapter-mock/
@@ -168,7 +187,7 @@ docs/
 - Add MQTT transport as the first remote-first transport.
 - Expand OpenClaw and Hermes adapters with native streaming event support.
 - Expand MCP support with resources, prompts, roots, and sampling.
-- Add A2A agent discovery and task routing.
+- Expose UAB itself as an A2A server with an Agent Card.
 - Add A2UI-style dynamic UI payload rendering.
 - Add adapter conformance tests for more real-agent method families.
 - Add token-based auth, pairing flows, and persistent audit logs.
