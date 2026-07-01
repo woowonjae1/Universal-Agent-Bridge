@@ -113,7 +113,8 @@ export function createHttpJsonRpcAdapter(
           }
         },
         options.token,
-        timeoutMs
+        timeoutMs,
+        context.signal
       );
 
       if ("error" in response) {
@@ -131,13 +132,14 @@ export function createHttpJsonRpcAdapter(
 async function fetchOptional<T>(
   url: string,
   token: string | undefined,
-  timeoutMs: number
+  timeoutMs: number,
+  signal?: AbortSignal
 ): Promise<T | undefined> {
   try {
     const response = await fetchWithTimeout(url, {
       method: "GET",
       headers: buildHeaders(token)
-    }, timeoutMs);
+    }, timeoutMs, signal);
 
     if (!response.ok) return undefined;
     return await response.json() as T;
@@ -150,13 +152,14 @@ async function postJson<T>(
   url: string,
   payload: unknown,
   token: string | undefined,
-  timeoutMs: number
+  timeoutMs: number,
+  signal?: AbortSignal
 ): Promise<T> {
   const response = await fetchWithTimeout(url, {
     method: "POST",
     headers: buildHeaders(token),
     body: JSON.stringify(payload)
-  }, timeoutMs);
+  }, timeoutMs, signal);
 
   const data = await response.json().catch(() => undefined) as T | undefined;
 
@@ -179,19 +182,55 @@ async function postJson<T>(
 async function fetchWithTimeout(
   url: string,
   init: RequestInit,
-  timeoutMs: number
+  timeoutMs: number,
+  upstream?: AbortSignal
 ): Promise<Response> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const { signal, dispose } = createRequestSignal(timeoutMs, upstream);
 
   try {
     return await fetch(url, {
       ...init,
-      signal: controller.signal
+      signal
     });
   } finally {
-    clearTimeout(timeout);
+    dispose();
   }
+}
+
+function createRequestSignal(
+  timeoutMs: number,
+  upstream?: AbortSignal
+): { signal: AbortSignal; dispose(): void } {
+  const controller = new AbortController();
+  const onAbort = () => controller.abort(createAbortError(upstream?.reason, "HTTP JSON-RPC request aborted."));
+  const timeout = setTimeout(() => {
+    controller.abort(createAbortError(undefined, `HTTP JSON-RPC request timed out after ${timeoutMs}ms.`));
+  }, timeoutMs);
+
+  if (upstream?.aborted) {
+    controller.abort(createAbortError(upstream.reason, "HTTP JSON-RPC request aborted."));
+  } else {
+    upstream?.addEventListener("abort", onAbort, { once: true });
+  }
+
+  return {
+    signal: controller.signal,
+    dispose() {
+      clearTimeout(timeout);
+      upstream?.removeEventListener("abort", onAbort);
+    }
+  };
+}
+
+function createAbortError(reason: unknown, fallbackMessage: string): Error {
+  const message = reason instanceof Error
+    ? reason.message
+    : typeof reason === "string"
+      ? reason
+      : fallbackMessage;
+  const error = new Error(message);
+  error.name = "AbortError";
+  return error;
 }
 
 function buildHeaders(token: string | undefined): Record<string, string> {

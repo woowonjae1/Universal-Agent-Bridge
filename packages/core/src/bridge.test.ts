@@ -223,6 +223,31 @@ test("passes abort signals and times out long calls", async () => {
   assert.equal("error" in response ? response.error.code : undefined, -32005);
 });
 
+test("times out calls even when adapters ignore abort signals", async () => {
+  const bridge = new AgentBridge({
+    defaultTimeoutMs: 25
+  });
+  bridge.register({
+    ...adapter,
+    call() {
+      return new Promise(() => undefined);
+    }
+  });
+
+  const startedAt = Date.now();
+  const response = await bridge.handleRequest({
+    jsonrpc: "2.0",
+    id: "non_cooperative_timeout",
+    runtime: "test",
+    method: "system.hang"
+  });
+
+  assert.equal("error" in response, true);
+  assert.equal("error" in response ? response.error.code : undefined, -32005);
+  assert.match("error" in response ? response.error.message : "", /timed out/);
+  assert.ok(Date.now() - startedAt < 250);
+});
+
 test("can cancel an active bridge call by request id", async () => {
   const bridge = new AgentBridge();
   bridge.register({
@@ -252,6 +277,30 @@ test("can cancel an active bridge call by request id", async () => {
   assert.equal("error" in response ? response.error.message : undefined, "cancelled");
 });
 
+test("can cancel non-cooperative adapter calls by request id", async () => {
+  const bridge = new AgentBridge();
+  bridge.register({
+    ...adapter,
+    call() {
+      return new Promise(() => undefined);
+    }
+  });
+
+  const pending = bridge.handleRequest({
+    jsonrpc: "2.0",
+    id: "non_cooperative_cancel",
+    runtime: "test",
+    method: "system.hang"
+  });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+
+  assert.equal(bridge.cancel("non_cooperative_cancel"), true);
+  const response = await pending;
+  assert.equal("error" in response, true);
+  assert.equal("error" in response ? response.error.code : undefined, -32005);
+  assert.match("error" in response ? response.error.message : "", /cancelled/);
+});
+
 test("limits concurrent calls globally", async () => {
   const bridge = new AgentBridge({
     maxConcurrentCalls: 1
@@ -275,4 +324,43 @@ test("limits concurrent calls globally", async () => {
   ]);
 
   assert.equal(maxActive, 1);
+});
+
+test("times out queued calls without consuming concurrency slots", async () => {
+  const bridge = new AgentBridge({
+    maxConcurrentCalls: 1
+  });
+  let started = 0;
+  bridge.register({
+    ...adapter,
+    async call(request) {
+      started += 1;
+      if (request.method === "system.block") {
+        await new Promise(() => undefined);
+      }
+      return { ok: true };
+    }
+  });
+
+  const blocking = bridge.handleRequest({
+    jsonrpc: "2.0",
+    id: "queue_blocking",
+    runtime: "test",
+    method: "system.block"
+  });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+
+  const queued = await bridge.handleRequest({
+    jsonrpc: "2.0",
+    id: "queue_timeout",
+    runtime: "test",
+    method: "system.ping",
+    meta: { timeoutMs: 25 }
+  });
+
+  assert.equal("error" in queued, true);
+  assert.equal("error" in queued ? queued.error.code : undefined, -32005);
+  assert.equal(started, 1);
+  assert.equal(bridge.cancel("queue_blocking"), true);
+  await blocking;
 });

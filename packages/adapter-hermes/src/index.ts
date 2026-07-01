@@ -25,11 +25,11 @@ export interface HermesAdapterOptions {
 }
 
 interface HermesClient {
-  get(path: string): Promise<JsonValue>;
-  post(path: string, body?: unknown, headers?: Record<string, string>): Promise<JsonValue>;
-  patch(path: string, body?: unknown): Promise<JsonValue>;
-  delete(path: string): Promise<JsonValue>;
-  stream(path: string, init?: RequestInit): AsyncIterable<SseMessage>;
+  get(path: string, signal?: AbortSignal): Promise<JsonValue>;
+  post(path: string, body?: unknown, headers?: Record<string, string>, signal?: AbortSignal): Promise<JsonValue>;
+  patch(path: string, body?: unknown, signal?: AbortSignal): Promise<JsonValue>;
+  delete(path: string, signal?: AbortSignal): Promise<JsonValue>;
+  stream(path: string, init?: RequestInit, signal?: AbortSignal): AsyncIterable<SseMessage>;
 }
 
 interface SseMessage {
@@ -383,27 +383,27 @@ export function createHermesAdapter(
   const defaultModel = options.model ?? "hermes-agent";
 
   const client: HermesClient = {
-    get(path: string) {
-      return requestJson(baseUrl, path, { method: "GET" }, token, timeoutMs);
+    get(path: string, signal?: AbortSignal) {
+      return requestJson(baseUrl, path, { method: "GET" }, token, timeoutMs, signal);
     },
-    post(path: string, body?: unknown, headers?: Record<string, string>) {
+    post(path: string, body?: unknown, headers?: Record<string, string>, signal?: AbortSignal) {
       return requestJson(baseUrl, path, {
         method: "POST",
         headers,
         body: body === undefined ? undefined : JSON.stringify(body)
-      }, token, timeoutMs);
+      }, token, timeoutMs, signal);
     },
-    patch(path: string, body?: unknown) {
+    patch(path: string, body?: unknown, signal?: AbortSignal) {
       return requestJson(baseUrl, path, {
         method: "PATCH",
         body: body === undefined ? undefined : JSON.stringify(body)
-      }, token, timeoutMs);
+      }, token, timeoutMs, signal);
     },
-    delete(path: string) {
-      return requestJson(baseUrl, path, { method: "DELETE" }, token, timeoutMs);
+    delete(path: string, signal?: AbortSignal) {
+      return requestJson(baseUrl, path, { method: "DELETE" }, token, timeoutMs, signal);
     },
-    stream(path: string, init: RequestInit = {}) {
-      return requestSse(baseUrl, path, init, token, timeoutMs);
+    stream(path: string, init: RequestInit = {}, signal?: AbortSignal) {
+      return requestSse(baseUrl, path, init, token, timeoutMs, signal);
     }
   };
 
@@ -435,8 +435,8 @@ export function createHermesAdapter(
         };
       }
     },
-    async call(request) {
-      return callHermesMethod(client, request, defaultModel);
+    async call(request, context) {
+      return callHermesMethod(client, request, defaultModel, context.signal);
     },
     stream(request, context) {
       return streamHermesRequest(client, request, context, defaultModel);
@@ -447,23 +447,25 @@ export function createHermesAdapter(
 async function callHermesMethod(
   client: HermesClient,
   request: AdapterCallRequest,
-  defaultModel: string
+  defaultModel: string,
+  signal?: AbortSignal
 ): Promise<JsonValue> {
   switch (request.method) {
     case "system.health": {
       const detailed = readBooleanParam(request.params, "detailed", false);
-      return client.get(detailed ? "/health/detailed" : "/health");
+      return client.get(detailed ? "/health/detailed" : "/health", signal);
     }
     case "runtime.capabilities":
-      return client.get("/v1/capabilities");
+      return client.get("/v1/capabilities", signal);
     case "models.list":
-      return client.get("/v1/models");
+      return client.get("/v1/models", signal);
     case "chat.completions.create": {
       const body = withDefaultModel(readObjectParams(request.params), defaultModel);
       return client.post(
         "/v1/chat/completions",
         withoutKeys(body, ["session_id", "session_key"]),
-        hermesSessionHeaders(request.params)
+        hermesSessionHeaders(request.params),
+        signal
       );
     }
     case "responses.create": {
@@ -471,29 +473,31 @@ async function callHermesMethod(
       return client.post(
         "/v1/responses",
         withoutKeys(body, ["session_id", "session_key"]),
-        hermesSessionHeaders(request.params)
+        hermesSessionHeaders(request.params),
+        signal
       );
     }
     case "responses.get":
-      return client.get(`/v1/responses/${encodeURIComponent(readId(request.params))}`);
+      return client.get(`/v1/responses/${encodeURIComponent(readId(request.params))}`, signal);
     case "responses.delete":
-      return client.delete(`/v1/responses/${encodeURIComponent(readId(request.params))}`);
+      return client.delete(`/v1/responses/${encodeURIComponent(readId(request.params))}`, signal);
     case "runs.create": {
       const body = readObjectParams(request.params);
       return client.post(
         "/v1/runs",
         withoutKeys(body, ["session_key"]),
-        hermesSessionHeaders(request.params)
+        hermesSessionHeaders(request.params),
+        signal
       );
     }
     case "runs.get":
-      return client.get(`/v1/runs/${encodeURIComponent(readStringParam(request.params, "run_id"))}`);
+      return client.get(`/v1/runs/${encodeURIComponent(readStringParam(request.params, "run_id"))}`, signal);
     case "runs.stop":
-      return client.post(`/v1/runs/${encodeURIComponent(readStringParam(request.params, "run_id"))}/stop`, {});
+      return client.post(`/v1/runs/${encodeURIComponent(readStringParam(request.params, "run_id"))}/stop`, {}, undefined, signal);
     case "runs.approval": {
       const params = readObjectParams(request.params);
       const runId = readStringParam(params, "run_id");
-      return client.post(`/v1/runs/${encodeURIComponent(runId)}/approval`, withoutKeys(params, ["run_id"]));
+      return client.post(`/v1/runs/${encodeURIComponent(runId)}/approval`, withoutKeys(params, ["run_id"]), undefined, signal);
     }
     case "sessions.list": {
       const query = buildQuery(readObjectParams(request.params, true), [
@@ -502,30 +506,30 @@ async function callHermesMethod(
         "source",
         "include_children"
       ]);
-      return client.get(`/api/sessions${query}`);
+      return client.get(`/api/sessions${query}`, signal);
     }
     case "sessions.create":
-      return client.post("/api/sessions", readObjectParams(request.params, true));
+      return client.post("/api/sessions", readObjectParams(request.params, true), undefined, signal);
     case "sessions.get":
-      return client.get(`/api/sessions/${encodeURIComponent(readId(request.params))}`);
+      return client.get(`/api/sessions/${encodeURIComponent(readId(request.params))}`, signal);
     case "sessions.update": {
       const params = readObjectParams(request.params);
       const id = readId(params);
-      return client.patch(`/api/sessions/${encodeURIComponent(id)}`, withoutKeys(params, ["id", "session_id"]));
+      return client.patch(`/api/sessions/${encodeURIComponent(id)}`, withoutKeys(params, ["id", "session_id"]), signal);
     }
     case "sessions.delete":
-      return client.delete(`/api/sessions/${encodeURIComponent(readId(request.params))}`);
+      return client.delete(`/api/sessions/${encodeURIComponent(readId(request.params))}`, signal);
     case "sessions.messages":
-      return client.get(`/api/sessions/${encodeURIComponent(readId(request.params))}/messages`);
+      return client.get(`/api/sessions/${encodeURIComponent(readId(request.params))}/messages`, signal);
     case "sessions.fork": {
       const params = readObjectParams(request.params);
       const id = readId(params);
-      return client.post(`/api/sessions/${encodeURIComponent(id)}/fork`, withoutKeys(params, ["id", "session_id"]));
+      return client.post(`/api/sessions/${encodeURIComponent(id)}/fork`, withoutKeys(params, ["id", "session_id"]), undefined, signal);
     }
     case "sessions.chat": {
       const params = readObjectParams(request.params);
       const id = readId(params);
-      return client.post(`/api/sessions/${encodeURIComponent(id)}/chat`, withoutKeys(params, ["id", "session_id"]));
+      return client.post(`/api/sessions/${encodeURIComponent(id)}/chat`, withoutKeys(params, ["id", "session_id"]), undefined, signal);
     }
     case "sessions.chat.stream": {
       const params = readObjectParams(request.params);
@@ -534,12 +538,12 @@ async function callHermesMethod(
         client.stream(`/api/sessions/${encodeURIComponent(id)}/chat/stream`, {
           method: "POST",
           body: JSON.stringify(withoutKeys(params, ["id", "session_id"]))
-        })
+        }, signal)
       );
     }
     case "runs.events":
       return collectSseAsJson(
-        client.stream(`/v1/runs/${encodeURIComponent(readStringParam(request.params, "run_id"))}/events`)
+        client.stream(`/v1/runs/${encodeURIComponent(readStringParam(request.params, "run_id"))}/events`, {}, signal)
       );
     case "artifacts.list": {
       const query = buildQuery(readObjectParams(request.params, true), [
@@ -548,10 +552,10 @@ async function callHermesMethod(
         "limit",
         "offset"
       ]);
-      return client.get(`/api/artifacts${query}`);
+      return client.get(`/api/artifacts${query}`, signal);
     }
     case "artifacts.get":
-      return client.get(`/api/artifacts/${encodeURIComponent(readArtifactId(request.params))}`);
+      return client.get(`/api/artifacts/${encodeURIComponent(readArtifactId(request.params))}`, signal);
     case "toolcalls.list": {
       const query = buildQuery(readObjectParams(request.params, true), [
         "session_id",
@@ -559,33 +563,33 @@ async function callHermesMethod(
         "limit",
         "offset"
       ]);
-      return client.get(`/api/tool-calls${query}`);
+      return client.get(`/api/tool-calls${query}`, signal);
     }
     case "toolcalls.get":
-      return client.get(`/api/tool-calls/${encodeURIComponent(readToolCallId(request.params))}`);
+      return client.get(`/api/tool-calls/${encodeURIComponent(readToolCallId(request.params))}`, signal);
     case "skills.listInstalled":
-      return client.get("/v1/skills");
+      return client.get("/v1/skills", signal);
     case "toolsets.list":
-      return client.get("/v1/toolsets");
+      return client.get("/v1/toolsets", signal);
     case "jobs.list":
-      return client.get("/api/jobs");
+      return client.get("/api/jobs", signal);
     case "jobs.create":
-      return client.post("/api/jobs", readObjectParams(request.params));
+      return client.post("/api/jobs", readObjectParams(request.params), undefined, signal);
     case "jobs.get":
-      return client.get(`/api/jobs/${encodeURIComponent(readStringParam(request.params, "job_id"))}`);
+      return client.get(`/api/jobs/${encodeURIComponent(readStringParam(request.params, "job_id"))}`, signal);
     case "jobs.update": {
       const params = readObjectParams(request.params);
       const jobId = readStringParam(params, "job_id");
-      return client.patch(`/api/jobs/${encodeURIComponent(jobId)}`, withoutKeys(params, ["job_id"]));
+      return client.patch(`/api/jobs/${encodeURIComponent(jobId)}`, withoutKeys(params, ["job_id"]), signal);
     }
     case "jobs.delete":
-      return client.delete(`/api/jobs/${encodeURIComponent(readStringParam(request.params, "job_id"))}`);
+      return client.delete(`/api/jobs/${encodeURIComponent(readStringParam(request.params, "job_id"))}`, signal);
     case "jobs.pause":
-      return client.post(`/api/jobs/${encodeURIComponent(readStringParam(request.params, "job_id"))}/pause`, {});
+      return client.post(`/api/jobs/${encodeURIComponent(readStringParam(request.params, "job_id"))}/pause`, {}, undefined, signal);
     case "jobs.resume":
-      return client.post(`/api/jobs/${encodeURIComponent(readStringParam(request.params, "job_id"))}/resume`, {});
+      return client.post(`/api/jobs/${encodeURIComponent(readStringParam(request.params, "job_id"))}/resume`, {}, undefined, signal);
     case "jobs.run":
-      return client.post(`/api/jobs/${encodeURIComponent(readStringParam(request.params, "job_id"))}/run`, {});
+      return client.post(`/api/jobs/${encodeURIComponent(readStringParam(request.params, "job_id"))}/run`, {}, undefined, signal);
     default:
       throw new AdapterError(`Method '${request.method}' is not supported by Hermes adapter.`, {
         code: BRIDGE_ERROR_CODES.methodNotFound,
@@ -597,7 +601,7 @@ async function callHermesMethod(
 async function* streamHermesRequest(
   client: HermesClient,
   request: AdapterCallRequest,
-  _context: AdapterCallContext,
+  context: AdapterCallContext,
   defaultModel: string
 ): AsyncIterable<AdapterStreamEvent> {
   if (request.method === "sessions.chat.stream") {
@@ -607,7 +611,7 @@ async function* streamHermesRequest(
     for await (const message of client.stream(`/api/sessions/${encodeURIComponent(id)}/chat/stream`, {
       method: "POST",
       body: JSON.stringify(withoutKeys(params, ["id", "session_id"]))
-    })) {
+    }, context.signal)) {
       yield mapHermesSseMessage(message);
     }
     yield { type: "step", name: "hermes.session.chat", status: "finished" };
@@ -617,14 +621,14 @@ async function* streamHermesRequest(
   if (request.method === "runs.events") {
     const runId = readStringParam(request.params, "run_id");
     yield { type: "step", name: "hermes.run.events", status: "started" };
-    for await (const message of client.stream(`/v1/runs/${encodeURIComponent(runId)}/events`)) {
+    for await (const message of client.stream(`/v1/runs/${encodeURIComponent(runId)}/events`, {}, context.signal)) {
       yield mapHermesSseMessage(message);
     }
     yield { type: "step", name: "hermes.run.events", status: "finished" };
     return;
   }
 
-  const result = await callHermesMethod(client, request, defaultModel);
+  const result = await callHermesMethod(client, request, defaultModel, context.signal);
   yield {
     type: "result",
     data: result
@@ -636,10 +640,10 @@ async function requestJson(
   path: string,
   init: RequestInit,
   token: string | undefined,
-  timeoutMs: number
+  timeoutMs: number,
+  signal?: AbortSignal
 ): Promise<JsonValue> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const { signal: fetchSignal, dispose } = createRequestSignal(timeoutMs, signal);
 
   try {
     const response = await fetch(`${baseUrl}${path}`, {
@@ -649,7 +653,7 @@ async function requestJson(
         ...(token ? { authorization: `Bearer ${token}` } : {}),
         ...init.headers
       },
-      signal: controller.signal
+      signal: fetchSignal
     });
     const data = await readJsonOrNull(response);
 
@@ -665,10 +669,10 @@ async function requestJson(
     if (error instanceof AdapterError) throw error;
     const message = error instanceof Error ? error.message : String(error);
     throw new AdapterError(`Hermes API request failed: ${message}`, {
-      code: message.includes("abort") ? BRIDGE_ERROR_CODES.timeout : BRIDGE_ERROR_CODES.adapterUnavailable
+      code: isAbortLike(error) ? BRIDGE_ERROR_CODES.timeout : BRIDGE_ERROR_CODES.adapterUnavailable
     });
   } finally {
-    clearTimeout(timeout);
+    dispose();
   }
 }
 
@@ -677,10 +681,10 @@ async function* requestSse(
   path: string,
   init: RequestInit,
   token: string | undefined,
-  timeoutMs: number
+  timeoutMs: number,
+  signal?: AbortSignal
 ): AsyncIterable<SseMessage> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const { signal: fetchSignal, dispose } = createRequestSignal(timeoutMs, signal);
 
   try {
     const response = await fetch(`${baseUrl}${path}`, {
@@ -691,7 +695,7 @@ async function* requestSse(
         ...(token ? { authorization: `Bearer ${token}` } : {}),
         ...init.headers
       },
-      signal: controller.signal
+      signal: fetchSignal
     });
 
     if (!response.ok) {
@@ -729,11 +733,53 @@ async function* requestSse(
     if (error instanceof AdapterError) throw error;
     const message = error instanceof Error ? error.message : String(error);
     throw new AdapterError(`Hermes SSE request failed: ${message}`, {
-      code: message.includes("abort") ? BRIDGE_ERROR_CODES.timeout : BRIDGE_ERROR_CODES.adapterUnavailable
+      code: isAbortLike(error) ? BRIDGE_ERROR_CODES.timeout : BRIDGE_ERROR_CODES.adapterUnavailable
     });
   } finally {
-    clearTimeout(timeout);
+    dispose();
   }
+}
+
+function createRequestSignal(
+  timeoutMs: number,
+  upstream?: AbortSignal
+): { signal: AbortSignal; dispose(): void } {
+  const controller = new AbortController();
+  const onAbort = () => controller.abort(createAbortError(upstream?.reason, "Hermes request aborted."));
+  const timeout = setTimeout(() => {
+    controller.abort(createAbortError(undefined, `Hermes request timed out after ${timeoutMs}ms.`));
+  }, timeoutMs);
+
+  if (upstream?.aborted) {
+    controller.abort(createAbortError(upstream.reason, "Hermes request aborted."));
+  } else {
+    upstream?.addEventListener("abort", onAbort, { once: true });
+  }
+
+  return {
+    signal: controller.signal,
+    dispose() {
+      clearTimeout(timeout);
+      upstream?.removeEventListener("abort", onAbort);
+    }
+  };
+}
+
+function isAbortLike(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const message = error.message.toLowerCase();
+  return error.name === "AbortError" || message.includes("abort") || message.includes("timed out");
+}
+
+function createAbortError(reason: unknown, fallbackMessage: string): Error {
+  const message = reason instanceof Error
+    ? reason.message
+    : typeof reason === "string"
+      ? reason
+      : fallbackMessage;
+  const error = new Error(message);
+  error.name = "AbortError";
+  return error;
 }
 
 function parseSseMessage(chunk: string): SseMessage | undefined {

@@ -3,6 +3,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import type { AddressInfo } from "node:net";
 import test from "node:test";
 import { createHermesAdapter } from "./index.js";
+import { BRIDGE_ERROR_CODES } from "@uab/protocol";
 
 test("Hermes adapter maps sessions.list to /api/sessions", async () => {
   const calls: Array<{ method: string; path: string }> = [];
@@ -240,6 +241,57 @@ test("Hermes adapter maps artifacts and tool calls to real API paths", async () 
   }
 });
 
+test("Hermes adapter aborts in-flight HTTP requests from context signal", async () => {
+  let requestClosed = false;
+  const server = createServer((request, response) => {
+    request.on("close", () => {
+      requestClosed = true;
+      response.destroy();
+    });
+    response.setHeader("content-type", "application/json");
+  });
+
+  await listen(server);
+  const port = readPort(server);
+  const controller = new AbortController();
+
+  try {
+    const adapter = createHermesAdapter({
+      baseUrl: `http://127.0.0.1:${port}`,
+      timeoutMs: 10_000
+    });
+    const pending = Promise.resolve(adapter.call({
+      method: "models.list",
+      params: {},
+      raw: {
+        jsonrpc: "2.0",
+        id: "req_abort",
+        runtime: "hermes",
+        method: "models.list"
+      }
+    }, {
+      requestId: "req_abort",
+      traceId: "trace",
+      signal: controller.signal
+    }));
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    controller.abort(new Error("stop hermes request"));
+
+    await assert.rejects(
+      pending,
+      (error: unknown) => {
+        assert.equal((error as { code?: number }).code, BRIDGE_ERROR_CODES.timeout);
+        assert.match(error instanceof Error ? error.message : "", /stop hermes request/);
+        return true;
+      }
+    );
+    await waitFor(() => requestClosed);
+  } finally {
+    await close(server);
+  }
+});
+
 function listen(server: ReturnType<typeof createServer>): Promise<void> {
   return new Promise((resolve, reject) => {
     server.once("error", reject);
@@ -261,4 +313,14 @@ function close(server: ReturnType<typeof createServer>): Promise<void> {
   return new Promise((resolve, reject) => {
     server.close((error) => error ? reject(error) : resolve());
   });
+}
+
+async function waitFor(condition: () => boolean, timeoutMs = 500): Promise<void> {
+  const startedAt = Date.now();
+  while (!condition()) {
+    if (Date.now() - startedAt > timeoutMs) {
+      throw new Error("Timed out waiting for condition.");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
 }

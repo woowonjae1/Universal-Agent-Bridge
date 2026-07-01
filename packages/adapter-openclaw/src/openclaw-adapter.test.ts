@@ -12,6 +12,7 @@ import {
   createOpenClawAdapter,
   type OpenClawDeviceIdentityOptions
 } from "./index.js";
+import { BRIDGE_ERROR_CODES } from "@uab/protocol";
 
 test("OpenClaw adapter performs Gateway connect then RPC call", async () => {
   const server = createServer();
@@ -293,6 +294,71 @@ test("OpenClaw adapter persists Gateway device token from hello auth", async () 
   }
 });
 
+test("OpenClaw Gateway adapter closes WebSocket when context signal aborts", async () => {
+  const server = createServer();
+  const wss = new WebSocketServer({ server });
+  let socketClosed = false;
+
+  wss.on("connection", (socket: WebSocket) => {
+    socket.on("close", () => {
+      socketClosed = true;
+    });
+    socket.on("message", (raw: Buffer) => {
+      const frame = JSON.parse(String(raw)) as { id: string; method: string };
+      if (frame.method === "connect") {
+        socket.send(JSON.stringify({
+          type: "res",
+          id: frame.id,
+          ok: true,
+          payload: { type: "hello-ok", protocol: 4 }
+        }));
+      }
+    });
+  });
+
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const port = readPort(server);
+  const controller = new AbortController();
+
+  try {
+    const adapter = createOpenClawAdapter({
+      gatewayUrl: `ws://127.0.0.1:${port}`,
+      timeoutMs: 10_000
+    });
+    const pending = Promise.resolve(adapter.call({
+      method: "status",
+      params: {},
+      raw: {
+        jsonrpc: "2.0",
+        id: "req_abort",
+        runtime: "openclaw",
+        method: "status"
+      }
+    }, {
+      requestId: "req_abort",
+      traceId: "trace",
+      signal: controller.signal
+    }));
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    controller.abort(new Error("stop openclaw gateway"));
+
+    await assert.rejects(
+      pending,
+      (error: unknown) => {
+        assert.equal((error as { code?: number }).code, BRIDGE_ERROR_CODES.timeout);
+        assert.match(error instanceof Error ? error.message : "", /aborted/);
+        return true;
+      }
+    );
+    await waitFor(() => socketClosed);
+  } finally {
+    wss.close();
+    await closeServer(server);
+  }
+});
+
 test("OpenClaw CLI fallback maps local session and model commands", async () => {
   const dir = await mkdtemp(join(tmpdir(), "uab-openclaw-cli-"));
   const logPath = join(dir, "calls.jsonl");
@@ -354,6 +420,49 @@ test("OpenClaw CLI fallback maps local session and model commands", async () => 
   }
 });
 
+test("OpenClaw CLI fallback kills process when context signal aborts", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "uab-openclaw-cli-abort-"));
+  const cliPath = join(dir, "fake-openclaw-hang.mjs");
+  await writeFile(cliPath, `
+    setTimeout(() => {
+      console.log(JSON.stringify({ ok: true }));
+    }, 10000);
+  `);
+  const controller = new AbortController();
+  const adapter = createOpenClawAdapter({
+    mode: "cli",
+    cliCommand: `node "${cliPath}"`,
+    timeoutMs: 10_000
+  });
+
+  const pending = Promise.resolve(adapter.call({
+    method: "status",
+    params: {},
+    raw: {
+      jsonrpc: "2.0",
+      id: "req_abort",
+      runtime: "openclaw",
+      method: "status"
+    }
+  }, {
+    requestId: "req_abort",
+    traceId: "trace",
+    signal: controller.signal
+  }));
+
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  controller.abort(new Error("stop openclaw cli"));
+
+  await assert.rejects(
+    pending,
+    (error: unknown) => {
+      assert.equal((error as { code?: number }).code, BRIDGE_ERROR_CODES.timeout);
+      assert.match(error instanceof Error ? error.message : "", /aborted/);
+      return true;
+    }
+  );
+});
+
 test("OpenClaw CLI fallback maps models.list to fast model status by default", async () => {
   const dir = await mkdtemp(join(tmpdir(), "uab-openclaw-cli-"));
   const logPath = join(dir, "calls.jsonl");
@@ -413,6 +522,16 @@ function closeServer(server: ReturnType<typeof createServer>): Promise<void> {
   return new Promise((resolve, reject) => {
     server.close((error) => error ? reject(error) : resolve());
   });
+}
+
+async function waitFor(condition: () => boolean, timeoutMs = 500): Promise<void> {
+  const startedAt = Date.now();
+  while (!condition()) {
+    if (Date.now() - startedAt > timeoutMs) {
+      throw new Error("Timed out waiting for condition.");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
 }
 
 function createTestDeviceIdentity(): OpenClawDeviceIdentityOptions {

@@ -127,7 +127,7 @@ export class AgentBridge {
     const limiter = this.runtimeLimiter(runtime);
 
     try {
-      const result = await this.globalLimiter.run(() => limiter.run(() => adapter.call(callRequest, context)));
+      const result = await this.runLimited(active.signal, limiter, () => adapter.call(callRequest, context));
       const response = createSuccessResponse(routedRequest, toJsonValue(result));
       this.recordAudit(routedRequest, runtime, traceId, startedAt, response, principal);
       return response;
@@ -214,36 +214,48 @@ export class AgentBridge {
     const context = this.createAdapterContext(routedRequest, runtime, traceId, principal, active.signal);
     const limiter = this.runtimeLimiter(runtime);
 
+    let globalAcquired = false;
+    let runtimeAcquired = false;
     try {
-      await this.globalLimiter.acquire();
-      await limiter.acquire();
-      try {
-        if (adapter.stream) {
-          let finalResult: JsonValue | undefined;
-          for await (const event of adapter.stream(callRequest, context)) {
+      await this.globalLimiter.acquire(active.signal);
+      globalAcquired = true;
+      await limiter.acquire(active.signal);
+      runtimeAcquired = true;
+
+      if (adapter.stream) {
+        let finalResult: JsonValue | undefined;
+        const iterator = adapter.stream(callRequest, context)[Symbol.asyncIterator]();
+        try {
+          while (true) {
+            const next = await raceWithSignal(iterator.next(), active.signal);
+            if (next.done) break;
+            const event = next.value;
             if (event.type === "result") {
               finalResult = event.data;
             }
             yield event;
           }
-
-          const response = createSuccessResponse(routedRequest, finalResult ?? null);
-          this.recordAudit(routedRequest, runtime, traceId, startedAt, response, principal);
-          return;
+        } catch (error) {
+          void iterator.return?.().catch(() => undefined);
+          throw error;
         }
 
-        const result = await adapter.call(callRequest, context);
-        const resultJson = toJsonValue(result);
-        const response = createSuccessResponse(routedRequest, resultJson);
+        const response = createSuccessResponse(routedRequest, finalResult ?? null);
         this.recordAudit(routedRequest, runtime, traceId, startedAt, response, principal);
-        yield {
-          type: "result",
-          data: resultJson
-        };
-      } finally {
-        limiter.release();
-        this.globalLimiter.release();
+        return;
       }
+
+      const result = await raceWithSignal(
+        Promise.resolve(adapter.call(callRequest, context)),
+        active.signal
+      );
+      const resultJson = toJsonValue(result);
+      const response = createSuccessResponse(routedRequest, resultJson);
+      this.recordAudit(routedRequest, runtime, traceId, startedAt, response, principal);
+      yield {
+        type: "result",
+        data: resultJson
+      };
     } catch (error) {
       const response = this.errorResponseFromAdapterError(routedRequest, error, "Adapter stream failed.");
       const maybeError = response.error;
@@ -260,6 +272,8 @@ export class AgentBridge {
         data: maybeError.data
       };
     } finally {
+      if (runtimeAcquired) limiter.release();
+      if (globalAcquired) this.globalLimiter.release();
       active.dispose();
     }
   }
@@ -491,6 +505,24 @@ export class AgentBridge {
     return limiter;
   }
 
+  private async runLimited<T>(
+    signal: AbortSignal,
+    runtimeLimiter: ConcurrencyLimiter,
+    fn: () => Promise<T> | T
+  ): Promise<T> {
+    await this.globalLimiter.acquire(signal);
+    try {
+      await runtimeLimiter.acquire(signal);
+      try {
+        return await raceWithSignal(Promise.resolve(fn()), signal);
+      } finally {
+        runtimeLimiter.release();
+      }
+    } finally {
+      this.globalLimiter.release();
+    }
+  }
+
   private errorResponseFromAdapterError(
     request: BridgeRequest,
     error: unknown,
@@ -533,15 +565,15 @@ interface ActiveBridgeCall {
 
 class ConcurrencyLimiter {
   private active = 0;
-  private readonly queue: Array<() => void> = [];
+  private readonly queue: Array<LimiterWaiter> = [];
   private readonly max: number;
 
   constructor(max: number | undefined) {
     this.max = normalizePositiveNumber(max) ?? Number.POSITIVE_INFINITY;
   }
 
-  async run<T>(fn: () => Promise<T> | T): Promise<T> {
-    await this.acquire();
+  async run<T>(fn: () => Promise<T> | T, signal?: AbortSignal): Promise<T> {
+    await this.acquire(signal);
     try {
       return await fn();
     } finally {
@@ -549,25 +581,44 @@ class ConcurrencyLimiter {
     }
   }
 
-  acquire(): Promise<void> {
+  acquire(signal?: AbortSignal): Promise<void> {
+    if (signal?.aborted) return Promise.reject(abortErrorFromSignal(signal));
+
     if (!Number.isFinite(this.max) || this.active < this.max) {
       this.active += 1;
       return Promise.resolve();
     }
 
-    return new Promise((resolve) => {
-      this.queue.push(() => {
-        this.active += 1;
-        resolve();
-      });
+    return new Promise((resolve, reject) => {
+      const waiter: LimiterWaiter = {
+        release: () => {
+          signal?.removeEventListener("abort", onAbort);
+          this.active += 1;
+          resolve();
+        }
+      };
+      const onAbort = () => {
+        const index = this.queue.indexOf(waiter);
+        if (index >= 0) this.queue.splice(index, 1);
+        reject(abortErrorFromSignal(signal));
+      };
+
+      if (signal) {
+        signal.addEventListener("abort", onAbort, { once: true });
+      }
+      this.queue.push(waiter);
     });
   }
 
   release(): void {
     if (this.active > 0) this.active -= 1;
     const next = this.queue.shift();
-    if (next) next();
+    if (next) next.release();
   }
+}
+
+interface LimiterWaiter {
+  release(): void;
 }
 
 function createAdapterCallRequest(request: BridgeRequest): AdapterCallRequest {
@@ -590,4 +641,33 @@ function normalizeNonEmptyString(value: unknown): string | undefined {
 function toJsonValue(value: unknown): JsonValue {
   if (value === undefined) return null;
   return JSON.parse(JSON.stringify(value)) as JsonValue;
+}
+
+function raceWithSignal<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.reject(abortErrorFromSignal(signal));
+
+  return new Promise((resolve, reject) => {
+    let abortTimer: NodeJS.Timeout | undefined;
+    const onAbort = () => {
+      abortTimer = setTimeout(() => reject(abortErrorFromSignal(signal)), 0);
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(resolve, reject).finally(() => {
+      if (abortTimer) clearTimeout(abortTimer);
+      signal.removeEventListener("abort", onAbort);
+    });
+  });
+}
+
+function abortErrorFromSignal(signal?: AbortSignal): Error {
+  const reason = signal?.reason;
+  const message = reason instanceof Error
+    ? reason.message
+    : typeof reason === "string"
+      ? reason
+      : "Bridge request was aborted.";
+  const error = new Error(message);
+  error.name = "AbortError";
+  return error;
 }

@@ -9,6 +9,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import {
   AdapterError,
+  type AdapterCallContext,
   type AdapterCallRequest,
   type AdapterStreamEvent,
   type AdapterHealth,
@@ -422,23 +423,24 @@ export function createOpenClawAdapter(
         };
       }
     },
-    async call(request) {
+    async call(request, context) {
       if (request.method === "gateway.call") {
         const params = readObjectParams(request.params);
         const method = readStringParam(params, "method");
-        return callOpenClaw(method, params.params ?? {}, options, timeoutMs);
+        return callOpenClaw(method, params.params ?? {}, options, timeoutMs, context.signal);
       }
 
-      return callOpenClaw(request.method, request.params ?? {}, options, timeoutMs);
+      return callOpenClaw(request.method, request.params ?? {}, options, timeoutMs, context.signal);
     },
-    stream(request) {
-      return streamOpenClaw(request, options, timeoutMs);
+    stream(request, context) {
+      return streamOpenClaw(request, context, options, timeoutMs);
     }
   };
 }
 
 async function* streamOpenClaw(
   request: AdapterCallRequest,
+  context: AdapterCallContext,
   options: OpenClawAdapterOptions,
   timeoutMs: number
 ): AsyncIterable<AdapterStreamEvent> {
@@ -449,7 +451,8 @@ async function* streamOpenClaw(
       method,
       request.params ?? {},
       options,
-      timeoutMs
+      timeoutMs,
+      context.signal
     );
     yield {
       type: "result",
@@ -459,7 +462,7 @@ async function* streamOpenClaw(
   }
 
   const queue = createAsyncQueue<AdapterStreamEvent>();
-  void callOpenClawGatewayWithEvents(method, request.params ?? {}, options, timeoutMs, (event) => {
+  void callOpenClawGatewayWithEvents(method, request.params ?? {}, options, timeoutMs, context.signal, (event) => {
     queue.push(openClawEventToStreamEvent(event));
   }).then((result) => {
     queue.push({
@@ -480,22 +483,24 @@ async function callOpenClaw(
   method: string,
   params: unknown,
   options: OpenClawAdapterOptions,
-  timeoutMs: number
+  timeoutMs: number,
+  signal?: AbortSignal
 ): Promise<unknown> {
   if (options.mode === "cli") {
-    return callOpenClawCli(method, params, options, timeoutMs);
+    return callOpenClawCli(method, params, options, timeoutMs, signal);
   }
 
-  return callOpenClawGateway(method, params, options, timeoutMs);
+  return callOpenClawGateway(method, params, options, timeoutMs, signal);
 }
 
 async function callOpenClawGateway(
   method: string,
   params: unknown,
   options: OpenClawAdapterOptions,
-  timeoutMs: number
+  timeoutMs: number,
+  signal?: AbortSignal
 ): Promise<unknown> {
-  const result = await callOpenClawGatewayWithEvents(method, params, options, timeoutMs);
+  const result = await callOpenClawGatewayWithEvents(method, params, options, timeoutMs, signal);
   return result.payload;
 }
 
@@ -504,6 +509,7 @@ async function callOpenClawGatewayWithEvents(
   params: unknown,
   options: OpenClawAdapterOptions,
   timeoutMs: number,
+  signal?: AbortSignal,
   onEvent?: (event: OpenClawGatewayEvent) => void
 ): Promise<{ payload: unknown; events: OpenClawGatewayEvent[] }> {
   const WebSocketCtor = globalThis.WebSocket as unknown as WebSocketConstructor | undefined;
@@ -525,6 +531,7 @@ async function callOpenClawGatewayWithEvents(
   let connectChallengeNonce: string | undefined;
   let resolveChallenge: ((nonce: string | undefined) => void) | undefined;
   let rejectChallenge: ((error: Error) => void) | undefined;
+  let rejectOpen: ((error: Error) => void) | undefined;
 
   const sendRequest = (requestMethod: string, requestParams: unknown) => {
     const id = `uab_${Date.now().toString(36)}_${counter++}`;
@@ -543,13 +550,30 @@ async function callOpenClawGatewayWithEvents(
     return promise;
   };
 
+  const failPending = (error: AdapterError) => {
+    rejectOpen?.(error);
+    rejectOpen = undefined;
+    rejectChallenge?.(error);
+    resolveChallenge = undefined;
+    rejectChallenge = undefined;
+    for (const entry of pending.values()) {
+      entry.reject(error);
+    }
+    pending.clear();
+  };
+
   const waitForOpen = new Promise<void>((resolve, reject) => {
-    socket.addEventListener("open", () => resolve(), { once: true });
+    rejectOpen = reject;
+    socket.addEventListener("open", () => {
+      rejectOpen = undefined;
+      resolve();
+    }, { once: true });
     socket.addEventListener("error", () => reject(new Error("OpenClaw Gateway WebSocket failed to open.")));
     socket.addEventListener("close", () => {
       if (!connected) reject(new Error("OpenClaw Gateway WebSocket closed before connect."));
     });
   });
+  waitForOpen.catch(() => undefined);
 
   const waitForConnectChallenge = new Promise<string | undefined>((resolve, reject) => {
     resolveChallenge = resolve;
@@ -597,30 +621,28 @@ async function callOpenClawGatewayWithEvents(
 
   socket.addEventListener("close", () => {
     closed = true;
-    rejectChallenge?.(new AdapterError("OpenClaw Gateway WebSocket closed before connect challenge.", {
+    failPending(new AdapterError("OpenClaw Gateway WebSocket closed.", {
       code: BRIDGE_ERROR_CODES.adapterUnavailable
     }));
-    resolveChallenge = undefined;
-    rejectChallenge = undefined;
-    for (const entry of pending.values()) {
-      entry.reject(new AdapterError("OpenClaw Gateway WebSocket closed.", {
-        code: BRIDGE_ERROR_CODES.adapterUnavailable
-      }));
-    }
-    pending.clear();
   });
 
+  const abortGateway = () => {
+    failPending(new AdapterError("OpenClaw Gateway request aborted.", {
+      code: BRIDGE_ERROR_CODES.timeout
+    }));
+    if (!closed) socket.close();
+  };
+
   const timeout = setTimeout(() => {
-    socket.close();
-    for (const entry of pending.values()) {
-      entry.reject(new AdapterError("OpenClaw Gateway request timed out.", {
-        code: BRIDGE_ERROR_CODES.timeout
-      }));
-    }
-    pending.clear();
+    failPending(new AdapterError("OpenClaw Gateway request timed out.", {
+      code: BRIDGE_ERROR_CODES.timeout
+    }));
+    if (!closed) socket.close();
   }, timeoutMs);
 
   try {
+    if (signal?.aborted) abortGateway();
+    signal?.addEventListener("abort", abortGateway, { once: true });
     await waitForOpen;
     const challengeNonce = options.deviceIdentity
       ? await Promise.race([
@@ -643,6 +665,7 @@ async function callOpenClawGatewayWithEvents(
     });
   } finally {
     clearTimeout(timeout);
+    signal?.removeEventListener("abort", abortGateway);
     if (!closed) socket.close();
   }
 }
@@ -651,7 +674,8 @@ async function callOpenClawCli(
   method: string,
   params: unknown,
   options: OpenClawAdapterOptions,
-  timeoutMs: number
+  timeoutMs: number,
+  signal?: AbortSignal
 ): Promise<unknown> {
   const command = options.cliCommand ?? "openclaw";
   const args = buildOpenClawCliArgs(method, params);
@@ -663,12 +687,29 @@ async function callOpenClawCli(
     });
     let stdout = "";
     let stderr = "";
-    const timeout = setTimeout(() => {
+    let settled = false;
+    const settle = (callback: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      signal?.removeEventListener("abort", onAbort);
+      callback();
+    };
+    const abortChild = (message: string) => {
       child.kill();
-      reject(new AdapterError("OpenClaw CLI request timed out.", {
+      settle(() => reject(new AdapterError(message, {
         code: BRIDGE_ERROR_CODES.timeout
-      }));
+      })));
+    };
+    const onAbort = () => abortChild("OpenClaw CLI request aborted.");
+    const timeout = setTimeout(() => {
+      abortChild("OpenClaw CLI request timed out.");
     }, timeoutMs);
+    if (signal?.aborted) {
+      abortChild("OpenClaw CLI request aborted.");
+    } else {
+      signal?.addEventListener("abort", onAbort, { once: true });
+    }
 
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
@@ -679,26 +720,26 @@ async function callOpenClawCli(
       stderr += chunk;
     });
     child.on("error", (error) => {
-      clearTimeout(timeout);
-      reject(new AdapterError(`OpenClaw CLI failed: ${error.message}`, {
+      settle(() => reject(new AdapterError(`OpenClaw CLI failed: ${error.message}`, {
         code: BRIDGE_ERROR_CODES.adapterUnavailable
-      }));
+      })));
     });
     child.on("close", (code) => {
-      clearTimeout(timeout);
       if (code !== 0) {
-        reject(new AdapterError(`OpenClaw CLI exited with code ${code}.`, {
+        settle(() => reject(new AdapterError(`OpenClaw CLI exited with code ${code}.`, {
           code: BRIDGE_ERROR_CODES.adapterUnavailable,
           data: { stderr: stderr.trim() }
-        }));
+        })));
         return;
       }
 
-      try {
-        resolve(JSON.parse(stdout) as JsonValue);
-      } catch {
-        resolve({ output: stdout.trim() });
-      }
+      settle(() => {
+        try {
+          resolve(JSON.parse(stdout) as JsonValue);
+        } catch {
+          resolve({ output: stdout.trim() });
+        }
+      });
     });
   });
 }
