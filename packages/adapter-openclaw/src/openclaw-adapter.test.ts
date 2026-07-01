@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import { once } from "node:events";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import test from "node:test";
 import { WebSocket, WebSocketServer } from "ws";
 import { createOpenClawAdapter } from "./index.js";
@@ -134,6 +137,115 @@ test("OpenClaw adapter streams Gateway event frames", async () => {
   } finally {
     wss.close();
     await closeServer(server);
+  }
+});
+
+test("OpenClaw CLI fallback maps local session and model commands", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "uab-openclaw-cli-"));
+  const logPath = join(dir, "calls.jsonl");
+  const cliPath = join(dir, "fake-openclaw.mjs");
+  await writeFile(cliPath, `
+    import { appendFileSync } from "node:fs";
+    const logPath = process.env.OPENCLAW_FAKE_LOG;
+    appendFileSync(logPath, JSON.stringify(process.argv.slice(2)) + "\\n");
+    console.log(JSON.stringify({ ok: true, argv: process.argv.slice(2) }));
+  `);
+
+  const adapter = createOpenClawAdapter({
+    mode: "cli",
+    cliCommand: `node "${cliPath}"`,
+    timeoutMs: 10_000
+  });
+  const context = {
+    requestId: "req",
+    traceId: "trace"
+  };
+  const previousLog = process.env.OPENCLAW_FAKE_LOG;
+  process.env.OPENCLAW_FAKE_LOG = logPath;
+
+  try {
+    await adapter.call({
+      method: "sessions.list",
+      params: { limit: 3, all_agents: true },
+      raw: {
+        jsonrpc: "2.0",
+        id: "req",
+        runtime: "openclaw",
+        method: "sessions.list"
+      }
+    }, context);
+    await adapter.call({
+      method: "models.list",
+      params: { provider: "openai" },
+      raw: {
+        jsonrpc: "2.0",
+        id: "req",
+        runtime: "openclaw",
+        method: "models.list"
+      }
+    }, context);
+
+    const calls = (await readFile(logPath, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as string[]);
+
+    assert.deepEqual(calls[0], ["sessions", "list", "--json", "--limit", "3", "--all-agents"]);
+    assert.deepEqual(calls[1], ["models", "list", "--json", "--provider", "openai"]);
+  } finally {
+    if (previousLog === undefined) {
+      delete process.env.OPENCLAW_FAKE_LOG;
+    } else {
+      process.env.OPENCLAW_FAKE_LOG = previousLog;
+    }
+  }
+});
+
+test("OpenClaw CLI fallback maps models.list to fast model status by default", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "uab-openclaw-cli-"));
+  const logPath = join(dir, "calls.jsonl");
+  const cliPath = join(dir, "fake-openclaw.mjs");
+  await writeFile(cliPath, `
+    import { appendFileSync } from "node:fs";
+    appendFileSync(process.env.OPENCLAW_FAKE_LOG, JSON.stringify(process.argv.slice(2)) + "\\n");
+    console.log(JSON.stringify({ ok: true }));
+  `);
+
+  const adapter = createOpenClawAdapter({
+    mode: "cli",
+    cliCommand: `node "${cliPath}"`,
+    timeoutMs: 10_000
+  });
+  const previousLog = process.env.OPENCLAW_FAKE_LOG;
+  process.env.OPENCLAW_FAKE_LOG = logPath;
+
+  try {
+    await adapter.call({
+      method: "models.list",
+      params: {},
+      raw: {
+        jsonrpc: "2.0",
+        id: "req",
+        runtime: "openclaw",
+        method: "models.list"
+      }
+    }, {
+      requestId: "req",
+      traceId: "trace"
+    });
+
+    const calls = (await readFile(logPath, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as string[]);
+
+    assert.deepEqual(calls[0], ["models", "status", "--json"]);
+  } finally {
+    if (previousLog === undefined) {
+      delete process.env.OPENCLAW_FAKE_LOG;
+    } else {
+      process.env.OPENCLAW_FAKE_LOG = previousLog;
+    }
   }
 });
 

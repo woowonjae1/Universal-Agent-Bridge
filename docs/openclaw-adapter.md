@@ -57,7 +57,24 @@ CLI mode shells out to:
 openclaw gateway call <method> --params <json> --json
 ```
 
-This is slower than Gateway mode but often works earlier in a real local setup because it reuses the user's OpenClaw CLI configuration.
+For local control-plane methods, CLI mode uses native OpenClaw commands before falling back to `gateway call`:
+
+| UAB method | CLI command |
+| --- | --- |
+| `sessions.list` | `openclaw sessions list --json` |
+| `models.list` | `openclaw models status --json` by default; `openclaw models list --json` when `catalog`, `all`, `provider`, or `local` is set |
+| `tasks.list` | `openclaw tasks list --json` |
+| `tasks.get` | `openclaw tasks show <lookup> --json` |
+| `tasks.cancel` | `openclaw tasks cancel <lookup> --json` |
+| `channels.status` | `openclaw channels status --json` |
+| `skills.status` | `openclaw skills list --json` |
+| `skills.search` | `openclaw skills search <query> --json` |
+| `cron.list` | `openclaw cron list --json` |
+| `config.get` | `openclaw config get <path> --json` |
+| `exec.approval.list` | `openclaw approvals get --json` |
+| `logs.tail` | `openclaw logs --json` |
+
+This is slower than Gateway mode but often works earlier in a real local setup because it reuses the user's OpenClaw CLI configuration and paired device identity.
 
 ## Method Families
 

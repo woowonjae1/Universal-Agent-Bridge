@@ -600,7 +600,7 @@ async function callOpenClawCli(
   timeoutMs: number
 ): Promise<unknown> {
   const command = options.cliCommand ?? "openclaw";
-  const args = ["gateway", "call", method, "--params", JSON.stringify(params ?? {}), "--json"];
+  const args = buildOpenClawCliArgs(method, params);
 
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
@@ -647,6 +647,120 @@ async function callOpenClawCli(
       }
     });
   });
+}
+
+function buildOpenClawCliArgs(method: string, params: unknown): string[] {
+  const object = isJsonObject(params) ? params as JsonObject : {};
+
+  switch (method) {
+    case "health":
+      return ["gateway", "call", "health", "--json", "--timeout", readCliTimeout(object)];
+    case "status":
+      return ["gateway", "call", "status", "--json", "--timeout", readCliTimeout(object)];
+    case "sessions.list":
+      return compactArgs([
+        "sessions",
+        "list",
+        "--json",
+        "--limit",
+        readStringLike(object.limit, "100"),
+        readFlag(object.all_agents, "--all-agents"),
+        readStringArg(object.agent, "--agent"),
+        readStringArg(object.active, "--active"),
+        readStringArg(object.store, "--store")
+      ]);
+    case "models.list":
+      if (!object.catalog && !object.all && !object.provider && !object.local) {
+        return compactArgs([
+          "models",
+          "status",
+          "--json",
+          readStringArg(object.agent, "--agent")
+        ]);
+      }
+      return compactArgs([
+        "models",
+        "list",
+        "--json",
+        readFlag(object.all, "--all"),
+        readFlag(object.local, "--local"),
+        readStringArg(object.provider, "--provider")
+      ]);
+    case "tasks.list":
+      return compactArgs([
+        "tasks",
+        "list",
+        "--json",
+        readStringArg(object.status, "--status"),
+        readStringArg(object.runtime, "--runtime")
+      ]);
+    case "tasks.get":
+      return ["tasks", "show", readTaskLookup(object), "--json"];
+    case "tasks.cancel":
+      return ["tasks", "cancel", readTaskLookup(object), "--json"];
+    case "channels.status":
+      return compactArgs([
+        "channels",
+        "status",
+        "--json",
+        readStringArg(object.channel, "--channel"),
+        readFlag(object.probe, "--probe"),
+        "--timeout",
+        readCliTimeout(object)
+      ]);
+    case "skills.status":
+    case "skills.listInstalled":
+      return compactArgs([
+        "skills",
+        "list",
+        "--json",
+        readFlag(object.eligible, "--eligible"),
+        readFlag(object.verbose, "--verbose"),
+        readStringArg(object.agent, "--agent")
+      ]);
+    case "skills.search":
+      return compactArgs([
+        "skills",
+        "search",
+        ...readSearchQuery(object),
+        "--json",
+        readStringArg(object.limit, "--limit")
+      ]);
+    case "cron.list":
+      return compactArgs([
+        "cron",
+        "list",
+        "--json",
+        readFlag(object.all, "--all"),
+        readStringArg(object.agent, "--agent"),
+        "--timeout",
+        readCliTimeout(object)
+      ]);
+    case "config.get":
+      return ["config", "get", readConfigPath(object), "--json"];
+    case "exec.approval.list":
+      return compactArgs([
+        "approvals",
+        "get",
+        "--json",
+        readFlag(object.gateway, "--gateway"),
+        readStringArg(object.node, "--node"),
+        "--timeout",
+        readCliTimeout(object)
+      ]);
+    case "logs.tail":
+      return compactArgs([
+        "logs",
+        "--json",
+        "--limit",
+        readStringLike(object.limit, "200"),
+        readStringArg(object.maxBytes ?? object.max_bytes, "--max-bytes"),
+        "--timeout",
+        readCliTimeout(object)
+      ]);
+    default:
+      return ["gateway", "call", method, "--params", JSON.stringify(params ?? {}), "--json"];
+  }
 }
 
 function buildOpenClawAuth(options: OpenClawAdapterOptions): JsonObject {
@@ -767,6 +881,64 @@ function readPayloadString(value: JsonValue, key: string): string | undefined {
   if (!isJsonObject(value)) return undefined;
   const entry = value[key];
   return typeof entry === "string" && entry.trim() !== "" ? entry.trim() : undefined;
+}
+
+function compactArgs(values: Array<string | string[] | undefined>): string[] {
+  return values.flatMap((value) => {
+    if (value === undefined) return [];
+    return Array.isArray(value) ? value : [value];
+  });
+}
+
+function readFlag(value: unknown, flag: string): string | undefined {
+  return value === true ? flag : undefined;
+}
+
+function readStringArg(value: unknown, flag: string): string[] | undefined {
+  if (typeof value === "string" && value.trim() !== "") {
+    return [flag, value.trim()];
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return [flag, String(value)];
+  }
+  return undefined;
+}
+
+function readStringLike(value: unknown, fallback: string): string {
+  if (typeof value === "string" && value.trim() !== "") return value.trim();
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  return fallback;
+}
+
+function readCliTimeout(params: JsonObject): string {
+  return readStringLike(params.timeoutMs ?? params.timeout_ms ?? params.timeout, "30000");
+}
+
+function readTaskLookup(params: JsonObject): string {
+  const value = params.taskId ?? params.task_id ?? params.runId ?? params.run_id ?? params.sessionKey ?? params.session_key ?? params.lookup;
+  if (typeof value === "string" && value.trim() !== "") return value.trim();
+  throw new AdapterError("Parameter 'taskId' is required.", {
+    code: BRIDGE_ERROR_CODES.invalidParams
+  });
+}
+
+function readConfigPath(params: JsonObject): string {
+  const value = params.path ?? params.key;
+  if (typeof value === "string" && value.trim() !== "") return value.trim();
+  return ".";
+}
+
+function readSearchQuery(params: JsonObject): string[] {
+  const query = params.query ?? params.q;
+  if (typeof query === "string" && query.trim() !== "") {
+    return query.trim().split(/\s+/);
+  }
+  if (Array.isArray(query)) {
+    return query
+      .filter((entry): entry is string => typeof entry === "string" && entry.trim() !== "")
+      .map((entry) => entry.trim());
+  }
+  return [];
 }
 
 function createAsyncQueue<T>(): AsyncIterable<T> & {
