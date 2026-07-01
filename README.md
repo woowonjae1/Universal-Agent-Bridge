@@ -26,6 +26,7 @@ This repository starts with a working v0.1 foundation:
 
 - `@uab/protocol`: JSON-RPC style bridge envelope, responses, and error codes.
 - `@uab/ag-ui`: AG-UI event mapping for frontend and app clients.
+- `@uab/mcp`: MCP server registry and tool invocation layer.
 - `@uab/adapter-sdk`: runtime adapter contract and shared capability types.
 - `@uab/core`: adapter registry, request router, and scoped access policy.
 - `@uab/adapter-mock`: in-memory adapter for demos and tests.
@@ -112,6 +113,23 @@ curl -N -X POST http://127.0.0.1:8787/agui/runs ^
   -d "{\"threadId\":\"thread_mock\",\"runId\":\"run_demo\",\"state\":{},\"messages\":[],\"tools\":[],\"context\":[],\"forwardedProps\":{\"uab\":{\"runtime\":\"mock\",\"method\":\"sessions.list\",\"params\":{}}}}"
 ```
 
+Register an MCP stdio tool server:
+
+```bash
+$env:UAB_MCP_SERVER_ID="example"
+$env:UAB_MCP_SERVER_COMMAND="node"
+$env:UAB_MCP_SERVER_ARGS="examples/mcp-stdio-server/server.mjs"
+npm run serve -- --port 8787
+```
+
+Call an MCP tool through the bridge:
+
+```bash
+curl -X POST http://127.0.0.1:8787/rpc ^
+  -H "content-type: application/json" ^
+  -d "{\"jsonrpc\":\"2.0\",\"id\":\"mcp_call\",\"runtime\":\"mcp\",\"method\":\"mcp.tools.call\",\"params\":{\"serverId\":\"example\",\"name\":\"echo\",\"arguments\":{\"text\":\"hello\"}}}"
+```
+
 ## Request Shape
 
 ```json
@@ -130,6 +148,7 @@ curl -N -X POST http://127.0.0.1:8787/agui/runs ^
 packages/
   protocol/
   ag-ui/
+  mcp/
   adapter-sdk/
   core/
   adapter-mock/
@@ -148,7 +167,7 @@ docs/
 
 - Add MQTT transport as the first remote-first transport.
 - Expand OpenClaw and Hermes adapters with native streaming event support.
-- Add MCP tool registry and tool-call routing.
+- Expand MCP support with resources, prompts, roots, and sampling.
 - Add A2A agent discovery and task routing.
 - Add A2UI-style dynamic UI payload rendering.
 - Add adapter conformance tests for more real-agent method families.

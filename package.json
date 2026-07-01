@@ -18,6 +18,7 @@
     "demo": "node packages/cli/dist/index.js demo",
     "dev:api": "node packages/cli/dist/index.js serve --port 8787",
     "example:agent": "node examples/http-agent/server.mjs",
+    "example:mcp": "node examples/mcp-stdio-server/server.mjs",
     "serve": "node packages/cli/dist/index.js serve",
     "test": "node scripts/run-tests.mjs"
   },

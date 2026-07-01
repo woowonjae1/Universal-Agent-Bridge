@@ -13,6 +13,7 @@
     { "path": "../adapter-http-jsonrpc" },
     { "path": "../adapter-hermes" },
     { "path": "../adapter-openclaw" },
+    { "path": "../mcp" },
     { "path": "../transport-http" }
   ]
 }

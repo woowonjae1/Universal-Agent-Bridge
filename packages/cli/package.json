@@ -25,6 +25,7 @@
     "@uab/adapter-mock": "file:../adapter-mock",
     "@uab/adapter-openclaw": "file:../adapter-openclaw",
     "@uab/core": "file:../core",
+    "@uab/mcp": "file:../mcp",
     "@uab/protocol": "file:../protocol",
     "@uab/transport-http": "file:../transport-http"
   }

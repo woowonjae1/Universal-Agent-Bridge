@@ -4,6 +4,7 @@ import { createHttpJsonRpcAdapter } from "@uab/adapter-http-jsonrpc";
 import { createMockAdapter } from "@uab/adapter-mock";
 import { createOpenClawAdapter } from "@uab/adapter-openclaw";
 import { AgentBridge } from "@uab/core";
+import { createMcpAdapter, readMcpServerConfigsFromEnv } from "@uab/mcp";
 import { createHttpBridgeServer, listen } from "@uab/transport-http";
 import type { BridgeRequest } from "@uab/protocol";
 
@@ -38,6 +39,7 @@ function createDemoBridge(): AgentBridge {
   registerHttpRuntimeFromEnv(bridge);
   registerHermesRuntimeFromEnv(bridge);
   registerOpenClawRuntimeFromEnv(bridge);
+  registerMcpRuntimeFromEnv(bridge);
   return bridge;
 }
 
@@ -158,6 +160,19 @@ function registerOpenClawRuntimeFromEnv(bridge: AgentBridge): void {
   );
 }
 
+function registerMcpRuntimeFromEnv(bridge: AgentBridge): void {
+  const servers = readMcpServerConfigsFromEnv(process.env);
+  if (servers.length === 0) return;
+
+  bridge.register(
+    createMcpAdapter({
+      id: process.env.UAB_MCP_RUNTIME_ID ?? "mcp",
+      name: process.env.UAB_MCP_RUNTIME_NAME ?? "MCP Tool Layer",
+      servers
+    })
+  );
+}
+
 function readEnvNumber(name: string, fallback: number): number {
   const value = process.env[name];
   if (!value) return fallback;
@@ -208,6 +223,12 @@ OpenClaw Gateway:
 
 OpenClaw CLI fallback:
   UAB_OPENCLAW_MODE=cli uab serve
+
+MCP stdio server:
+  UAB_MCP_SERVER_COMMAND=node UAB_MCP_SERVER_ARGS=examples/mcp-stdio-server/server.mjs uab serve
+
+MCP HTTP server:
+  UAB_MCP_SERVER_TRANSPORT=http UAB_MCP_SERVER_URL=http://127.0.0.1:3000/mcp uab serve
 `);
 }
 
