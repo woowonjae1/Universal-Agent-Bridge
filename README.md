@@ -25,13 +25,14 @@ OpenClaw Adapter | Hermes Adapter | Mock Adapter | Custom Adapter
 This repository starts with a working v0.1 foundation:
 
 - `@uab/protocol`: JSON-RPC style bridge envelope, responses, and error codes.
+- `@uab/ag-ui`: AG-UI event mapping for frontend and app clients.
 - `@uab/adapter-sdk`: runtime adapter contract and shared capability types.
 - `@uab/core`: adapter registry, request router, and scoped access policy.
 - `@uab/adapter-mock`: in-memory adapter for demos and tests.
 - `@uab/adapter-http-jsonrpc`: generic adapter for real agents that expose HTTP JSON-RPC.
 - `@uab/adapter-hermes`: Hermes Agent API Server adapter.
 - `@uab/adapter-openclaw`: OpenClaw Gateway adapter with CLI fallback.
-- `@uab/transport-http`: Node.js HTTP transport with `/rpc`, `/health`, and `/runtimes`.
+- `@uab/transport-http`: Node.js HTTP transport with `/rpc`, `/agui/runs`, `/health`, and `/runtimes`.
 - `@uab/cli`: local demo, HTTP server, and one-shot call commands.
 
 ## Quick Start
@@ -102,6 +103,15 @@ curl -X POST http://127.0.0.1:8787/rpc ^
   -d "{\"jsonrpc\":\"2.0\",\"id\":\"req_1\",\"runtime\":\"mock\",\"method\":\"sessions.list\",\"params\":{}}"
 ```
 
+Stream the same call through AG-UI SSE:
+
+```bash
+curl -N -X POST http://127.0.0.1:8787/agui/runs ^
+  -H "content-type: application/json" ^
+  -H "accept: text/event-stream" ^
+  -d "{\"threadId\":\"thread_mock\",\"runId\":\"run_demo\",\"state\":{},\"messages\":[],\"tools\":[],\"context\":[],\"forwardedProps\":{\"uab\":{\"runtime\":\"mock\",\"method\":\"sessions.list\",\"params\":{}}}}"
+```
+
 ## Request Shape
 
 ```json
@@ -119,6 +129,7 @@ curl -X POST http://127.0.0.1:8787/rpc ^
 ```text
 packages/
   protocol/
+  ag-ui/
   adapter-sdk/
   core/
   adapter-mock/
@@ -136,6 +147,9 @@ docs/
 ## Roadmap
 
 - Add MQTT transport as the first remote-first transport.
-- Expand OpenClaw and Hermes adapters with streaming event support.
+- Expand OpenClaw and Hermes adapters with native streaming event support.
+- Add MCP tool registry and tool-call routing.
+- Add A2A agent discovery and task routing.
+- Add A2UI-style dynamic UI payload rendering.
 - Add adapter conformance tests for more real-agent method families.
 - Add token-based auth, pairing flows, and persistent audit logs.

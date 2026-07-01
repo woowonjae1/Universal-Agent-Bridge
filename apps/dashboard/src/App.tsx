@@ -5,6 +5,7 @@ import {
   Copy,
   Database,
   Gauge,
+  Radio,
   Layers,
   Play,
   RefreshCw,
@@ -99,6 +100,19 @@ interface MethodsResponse {
   }>;
 }
 
+interface AgUiEvent {
+  type: string;
+  timestamp?: number;
+  message?: string;
+  code?: string;
+  delta?: string;
+  name?: string;
+  value?: unknown;
+  snapshot?: unknown;
+  result?: unknown;
+  [key: string]: unknown;
+}
+
 const defaultApiBase =
   localStorage.getItem("uab.apiBase") ?? "http://127.0.0.1:8787";
 
@@ -122,6 +136,9 @@ export function App() {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [auditEntries, setAuditEntries] = useState<AuditEntry[]>([]);
   const [methods, setMethods] = useState<MethodDefinition[]>([]);
+  const [agUiEvents, setAgUiEvents] = useState<AgUiEvent[]>([]);
+  const [agUiText, setAgUiText] = useState("");
+  const [streaming, setStreaming] = useState(false);
 
   const selected = useMemo(
     () => runtimes.find((runtime) => runtime.id === selectedRuntime),
@@ -242,6 +259,49 @@ export function App() {
       pushLog("error", `${selectedRuntime}.${method}`, message);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function sendAgUiRun() {
+    setStreaming(true);
+    setAgUiEvents([]);
+    setAgUiText("");
+    const runId = `run_${Date.now().toString(36)}`;
+
+    try {
+      const parsedParams = params.trim() ? JSON.parse(params) : {};
+      const payload = {
+        threadId: `thread_${selectedRuntime}`,
+        runId,
+        state: {
+          runtime: selectedRuntime,
+          method
+        },
+        messages: [],
+        tools: [],
+        context: [],
+        forwardedProps: {
+          uab: {
+            runtime: selectedRuntime,
+            method,
+            params: parsedParams
+          }
+        }
+      };
+
+      await streamAgUiEvents(`${apiBase}/agui/runs`, payload, (event) => {
+        setAgUiEvents((current) => [...current, event].slice(-40));
+        if (event.type === "TEXT_MESSAGE_CONTENT" && typeof event.delta === "string") {
+          setAgUiText((current) => `${current}${event.delta}`);
+        }
+      });
+
+      await refreshAudit();
+      pushLog("success", "AG-UI stream completed", `${selectedRuntime}.${method}`);
+    } catch (error) {
+      pushLog("error", "AG-UI stream failed", errorToMessage(error));
+    } finally {
+      setStreaming(false);
     }
   }
 
@@ -448,6 +508,10 @@ export function App() {
                   {loading ? <Zap size={17} aria-hidden="true" /> : <Play size={17} aria-hidden="true" />}
                   Send
                 </button>
+                <button className="secondary-button" onClick={sendAgUiRun} disabled={streaming || !selectedRuntime}>
+                  {streaming ? <Zap size={16} aria-hidden="true" /> : <Radio size={16} aria-hidden="true" />}
+                  AG-UI
+                </button>
                 <button className="secondary-button" onClick={resetParams}>
                   <RotateCcw size={16} aria-hidden="true" />
                   Reset
@@ -461,6 +525,25 @@ export function App() {
               <pre className="response-view">
                 {response ? JSON.stringify(response, null, 2) : "{\n  \"jsonrpc\": \"2.0\"\n}"}
               </pre>
+
+              <div className="event-panel">
+                <div className="event-head">
+                  <strong>AG-UI Events</strong>
+                  <span>{agUiEvents.length}</span>
+                </div>
+                {agUiText && <pre className="agui-text">{agUiText}</pre>}
+                <div className="event-list">
+                  {agUiEvents.map((event, index) => (
+                    <div className="event-row" key={`${event.type}_${index}`}>
+                      <span>{event.type}</span>
+                      <small>{formatAgUiEvent(event)}</small>
+                    </div>
+                  ))}
+                  {agUiEvents.length === 0 && (
+                    <div className="empty-state compact-empty">No stream events</div>
+                  )}
+                </div>
+              </div>
             </section>
           </div>
         </section>
@@ -560,6 +643,57 @@ async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
   return data;
 }
 
+async function streamAgUiEvents(
+  url: string,
+  payload: unknown,
+  onEvent: (event: AgUiEvent) => void
+): Promise<void> {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      accept: "text/event-stream"
+    },
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok || !response.body) {
+    throw new Error(`HTTP ${response.status}`);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const chunks = buffer.split("\n\n");
+    buffer = chunks.pop() ?? "";
+
+    for (const chunk of chunks) {
+      const event = parseSseData(chunk);
+      if (event) onEvent(event);
+    }
+  }
+
+  if (buffer.trim()) {
+    const event = parseSseData(buffer);
+    if (event) onEvent(event);
+  }
+}
+
+function parseSseData(chunk: string): AgUiEvent | undefined {
+  const data = chunk
+    .split("\n")
+    .filter((line) => line.startsWith("data:"))
+    .map((line) => line.slice(5).trimStart())
+    .join("\n");
+  if (!data) return undefined;
+  return JSON.parse(data) as AgUiEvent;
+}
+
 function errorToMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -573,4 +707,11 @@ function formatParamsExample(value: unknown, method: string): string {
     return JSON.stringify(value, null, 2);
   }
   return sampleParams[method] ?? "{}";
+}
+
+function formatAgUiEvent(event: AgUiEvent): string {
+  if (typeof event.delta === "string") return event.delta.slice(0, 120);
+  if (typeof event.message === "string") return event.message;
+  if (typeof event.name === "string") return event.name;
+  return event.timestamp ? new Date(event.timestamp).toLocaleTimeString() : "";
 }

@@ -6,6 +6,8 @@ const root = fileURLToPath(new URL("..", import.meta.url));
 const targets = [
   "packages/protocol/dist",
   "packages/protocol/tsconfig.tsbuildinfo",
+  "packages/ag-ui/dist",
+  "packages/ag-ui/tsconfig.tsbuildinfo",
   "packages/adapter-sdk/dist",
   "packages/adapter-sdk/tsconfig.tsbuildinfo",
   "packages/core/dist",

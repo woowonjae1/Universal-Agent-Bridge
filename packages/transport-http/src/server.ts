@@ -1,4 +1,12 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import {
+  createAgUiEvent,
+  createBridgeRunEvents,
+  encodeSseEvent,
+  readBridgeRun,
+  type AgUiEvent,
+  type AgUiRunAgentInput
+} from "@uab/ag-ui";
 import type { AgentBridge } from "@uab/core";
 import {
   BRIDGE_ERROR_CODES,
@@ -65,6 +73,21 @@ export function createHttpBridgeServer(options: HttpBridgeServerOptions): Server
         return;
       }
 
+      if (request.method === "GET" && url.pathname === "/agui/health") {
+        sendJson(response, 200, {
+          status: "ok",
+          transport: "sse",
+          endpoint: "/agui/runs"
+        });
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/agui/runs") {
+        const payload = await readJsonBody(request, maxBodyBytes);
+        await sendAgUiRun(response, options.bridge, payload);
+        return;
+      }
+
       if (request.method === "POST" && url.pathname === rpcPath) {
         const payload = await readJsonBody(request, maxBodyBytes);
         const bridgeResponse = await options.bridge.handleRequest(payload);
@@ -102,6 +125,78 @@ function sendJson(response: ServerResponse, statusCode: number, payload: unknown
   response.statusCode = statusCode;
   response.setHeader("content-type", "application/json; charset=utf-8");
   response.end(JSON.stringify(payload, null, 2));
+}
+
+async function sendAgUiRun(
+  response: ServerResponse,
+  bridge: AgentBridge,
+  payload: unknown
+): Promise<void> {
+  writeSseHeaders(response);
+
+  let descriptor: ReturnType<typeof readBridgeRun>;
+  try {
+    descriptor = readBridgeRun(payload);
+  } catch (error) {
+    writeSse(response, createAgUiEvent({
+      type: "RUN_ERROR",
+      message: error instanceof Error ? error.message : "Invalid AG-UI run input.",
+      code: "INVALID_AG_UI_INPUT"
+    }));
+    response.end();
+    return;
+  }
+
+  const input = payload as AgUiRunAgentInput;
+  writeSse(response, createAgUiEvent({
+    type: "RUN_STARTED",
+    threadId: descriptor.threadId,
+    runId: descriptor.runId,
+    parentRunId: descriptor.parentRunId,
+    input
+  }));
+  writeSse(response, createAgUiEvent({
+    type: "STATE_SNAPSHOT",
+    snapshot: {
+      bridge: "universal-agent-bridge",
+      runtime: descriptor.runtime,
+      method: descriptor.method,
+      status: "calling"
+    }
+  }));
+  writeSse(response, createAgUiEvent({
+    type: "CUSTOM",
+    name: "uab.request",
+    value: {
+      runtime: descriptor.runtime,
+      method: descriptor.method,
+      params: descriptor.params,
+      requestId: descriptor.request.id
+    }
+  }));
+  writeSse(response, createAgUiEvent({
+    type: "STEP_STARTED",
+    stepName: "bridge.call"
+  }));
+
+  const bridgeResponse = await bridge.handleRequest(descriptor.request);
+  const [, , , , ...tailEvents] = createBridgeRunEvents(input, descriptor, bridgeResponse);
+  for (const event of tailEvents) {
+    writeSse(response, event);
+  }
+  response.end();
+}
+
+function writeSseHeaders(response: ServerResponse): void {
+  response.statusCode = 200;
+  response.setHeader("content-type", "text/event-stream; charset=utf-8");
+  response.setHeader("cache-control", "no-cache, no-transform");
+  response.setHeader("connection", "keep-alive");
+  response.flushHeaders?.();
+}
+
+function writeSse(response: ServerResponse, event: AgUiEvent): void {
+  response.write(encodeSseEvent(event));
 }
 
 function writeCorsHeaders(response: ServerResponse, cors: CorsOptions | false): void {

@@ -6,9 +6,6 @@
   },
   "include": ["src/**/*.ts"],
   "references": [
-    { "path": "../protocol" },
-    { "path": "../adapter-sdk" },
-    { "path": "../ag-ui" },
-    { "path": "../core" }
+    { "path": "../protocol" }
   ]
 }

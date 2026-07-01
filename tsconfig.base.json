@@ -15,6 +15,7 @@
     "baseUrl": ".",
     "paths": {
       "@uab/protocol": ["packages/protocol/src/index.ts"],
+      "@uab/ag-ui": ["packages/ag-ui/src/index.ts"],
       "@uab/adapter-sdk": ["packages/adapter-sdk/src/index.ts"],
       "@uab/core": ["packages/core/src/index.ts"],
       "@uab/adapter-mock": ["packages/adapter-mock/src/index.ts"],
