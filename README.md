@@ -17,7 +17,7 @@ What it provides toward multi-agent work:
 - Unified access to multiple heterogeneous agent runtimes (OpenClaw, Hermes, A2A, HTTP JSON-RPC, MCP) behind one protocol.
 - Capability-based routing — select an agent by what it can do — plus health-aware scheduling with circuit breaking, retries, and failover.
 - Fan-out (`broadcast`) to every agent advertising a capability.
-- Sequential multi-step handoff (`runPlan`) across runtimes.
+- Plan orchestration (`runPlan`) across runtimes with dataflow templates, conditional skips, adjacent parallel groups, and handoff.
 
 What it deliberately does not do (what a full MAS would add):
 
@@ -48,7 +48,7 @@ This repository starts with a working v0.1 foundation:
 - `@uab/mcp`: MCP server registry and tool invocation layer.
 - `@uab/a2a`: A2A remote agent registry and JSON-RPC client layer.
 - `@uab/adapter-sdk`: runtime adapter contract and shared capability types.
-- `@uab/core`: adapter registry, session-aware request router, scoped access policy, cancellation, timeouts, and concurrency limits, plus health-aware scheduling (circuit breaking, retries, failover), capability routing, `broadcast` fan-out, `runPlan` multi-step handoff, a normalized memory/artifact resource model with CRUD, batched atomic persistence, and metrics/tracing with a dependency-free span-exporter hook.
+- `@uab/core`: adapter registry, session-aware request router, scoped access policy, cancellation, timeouts, and concurrency limits, plus health-aware scheduling (circuit breaking, retries, failover), capability routing, `broadcast` fan-out, `runPlan` orchestration, a normalized memory/artifact resource model with CRUD, batched atomic persistence, and metrics/tracing with a dependency-free span-exporter hook.
 - `@uab/adapter-http-jsonrpc`: generic adapter for real agents that expose HTTP JSON-RPC.
 - `@uab/adapter-hermes`: Hermes Agent API Server adapter.
 - `@uab/adapter-openclaw`: OpenClaw Gateway adapter with CLI fallback.

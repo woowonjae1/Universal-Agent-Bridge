@@ -66,6 +66,8 @@ export interface BridgePlanStep {
   session?: BridgeRequest["session"];
   meta?: BridgeRequest["meta"];
   handoff?: boolean | { fromStep?: string };
+  parallelGroup?: string;
+  when?: BridgePlanCondition;
 }
 
 export interface BridgePlan {
@@ -78,9 +80,21 @@ export interface BridgePlan {
 export interface BridgePlanStepResult {
   stepId: string;
   runtime?: string;
+  status: "success" | "error" | "skipped";
   response: BridgeResponse;
   traceId: string;
 }
+
+export type BridgePlanCondition =
+  | {
+      ref: string;
+      equals?: JsonValue;
+      notEquals?: JsonValue;
+      exists?: boolean;
+    }
+  | { all: BridgePlanCondition[] }
+  | { any: BridgePlanCondition[] }
+  | { not: BridgePlanCondition };
 
 export class AgentBridge {
   readonly registry = new AdapterRegistry();
@@ -404,57 +418,38 @@ export class AgentBridge {
   async runPlan(plan: BridgePlan, principal?: Principal): Promise<JsonValue> {
     const planId = normalizeNonEmptyString(plan.id) ?? `plan_${Date.now().toString(36)}`;
     const baseTraceId = normalizeNonEmptyString(plan.traceId) ?? `trace_${planId}`;
-    const stepRuntimes = new Map<string, string>();
+    const state: BridgePlanExecutionState = {
+      planId,
+      baseTraceId,
+      stepRuntimes: new Map(),
+      stepResults: new Map()
+    };
     const results: BridgePlanStepResult[] = [];
     let previousStepId: string | undefined;
     let status: "success" | "error" = "success";
 
-    for (let index = 0; index < plan.steps.length; index += 1) {
-      const step = plan.steps[index];
-      const stepId = normalizeNonEmptyString(step.id) ?? `step_${index + 1}`;
-      const handoffFrom = typeof step.handoff === "object"
-        ? normalizeNonEmptyString(step.handoff.fromStep)
-        : step.handoff === true
-          ? previousStepId
-          : undefined;
-      const handoffRuntime = handoffFrom ? stepRuntimes.get(handoffFrom) : undefined;
-      const traceId = `${baseTraceId}.${stepId}`;
-      const request: BridgeRequest = {
-        jsonrpc: "2.0",
-        id: `${planId}_${stepId}`,
-        runtime: step.runtime ?? handoffRuntime,
-        capability: step.runtime ?? handoffRuntime ? undefined : step.capability,
-        session: step.session,
-        method: step.method,
-        params: step.params,
-        meta: {
-          ...step.meta,
-          traceId
-        }
-      };
+    for (let index = 0; index < plan.steps.length;) {
+      const batch = collectPlanBatch(plan.steps, index);
+      const batchResults = batch.parallel
+        ? await Promise.all(
+          batch.steps.map((step, offset) =>
+            this.executePlanStep(step, index + offset, previousStepId, state, principal)
+          )
+        )
+        : [await this.executePlanStep(batch.steps[0], index, previousStepId, state, principal)];
 
-      if (step.handoff && !request.runtime) {
-        const response = createErrorResponse({
-          id: request.id,
-          code: BRIDGE_ERROR_CODES.invalidRequest,
-          message: `Plan step '${stepId}' requested handoff but no source runtime was available.`
-        });
-        results.push({ stepId, response, traceId });
-        status = "error";
-        if (plan.stopOnError !== false) break;
-        previousStepId = stepId;
-        continue;
+      for (const result of batchResults) {
+        results.push(result);
+        state.stepResults.set(result.stepId, result);
+        if (result.runtime) state.stepRuntimes.set(result.stepId, result.runtime);
+        if (result.status !== "skipped") previousStepId = result.stepId;
       }
 
-      const response = await this.call(request, principal);
-      const runtime = this.latestRuntimeForRequest(request.id, traceId);
-      if (runtime) stepRuntimes.set(stepId, runtime);
-      results.push({ stepId, runtime, response, traceId });
-      previousStepId = stepId;
-      if ("error" in response) {
+      if (batchResults.some((entry) => entry.status === "error")) {
         status = "error";
         if (plan.stopOnError !== false) break;
       }
+      index += batch.steps.length;
     }
 
     return toJsonValue({
@@ -463,6 +458,70 @@ export class AgentBridge {
       steps: results,
       final: results.at(-1)?.response ?? null
     });
+  }
+
+  private async executePlanStep(
+    step: BridgePlanStep,
+    index: number,
+    previousStepId: string | undefined,
+    state: BridgePlanExecutionState,
+    principal?: Principal
+  ): Promise<BridgePlanStepResult> {
+    const stepId = normalizeNonEmptyString(step.id) ?? `step_${index + 1}`;
+    const traceId = `${state.baseTraceId}.${stepId}`;
+    const requestId = `${state.planId}_${stepId}`;
+
+    if (!evaluatePlanCondition(step.when, state)) {
+      return {
+        stepId,
+        status: "skipped",
+        response: createSuccessResponse({
+          id: requestId
+        }, { skipped: true }),
+        traceId
+      };
+    }
+
+    const handoffFrom = typeof step.handoff === "object"
+      ? normalizeNonEmptyString(step.handoff.fromStep)
+      : step.handoff === true
+        ? previousStepId
+        : undefined;
+    const handoffRuntime = handoffFrom ? state.stepRuntimes.get(handoffFrom) : undefined;
+    const runtime = resolveTemplateString(step.runtime, state) ?? handoffRuntime;
+    const capability = runtime ? undefined : resolveTemplateString(step.capability, state);
+    const request: BridgeRequest = {
+      jsonrpc: "2.0",
+      id: requestId,
+      runtime,
+      capability,
+      session: resolvePlanSession(step.session, state),
+      method: resolveTemplateString(step.method, state) ?? step.method,
+      params: step.params === undefined ? undefined : resolvePlanTemplates(step.params, state),
+      meta: {
+        ...(step.meta ? resolvePlanTemplates(step.meta as JsonValue, state) as BridgeRequest["meta"] : {}),
+        traceId
+      }
+    };
+
+    if (step.handoff && !request.runtime) {
+      const response = createErrorResponse({
+        id: request.id,
+        code: BRIDGE_ERROR_CODES.invalidRequest,
+        message: `Plan step '${stepId}' requested handoff but no source runtime was available.`
+      });
+      return { stepId, status: "error", response, traceId };
+    }
+
+    const response = await this.call(request, principal);
+    const successfulRuntime = this.latestRuntimeForRequest(request.id, traceId);
+    return {
+      stepId,
+      runtime: successfulRuntime,
+      status: "error" in response ? "error" : "success",
+      response,
+      traceId
+    };
   }
 
   async listRuntimes(): Promise<JsonValue> {
@@ -1003,6 +1062,13 @@ interface BridgeSessionBinding {
   metadata?: JsonObject;
 }
 
+interface BridgePlanExecutionState {
+  planId: string;
+  baseTraceId: string;
+  stepRuntimes: Map<string, string>;
+  stepResults: Map<string, BridgePlanStepResult>;
+}
+
 type RuntimeResolution =
   | { runtime: string; request: BridgeRequest & { runtime: string } }
   | { runtime?: string; error: { code: number; message: string; data?: JsonValue } };
@@ -1016,6 +1082,188 @@ interface ActiveBridgeCall {
   controller: AbortController;
   signal: AbortSignal;
   dispose(): void;
+}
+
+function collectPlanBatch(steps: BridgePlanStep[], index: number): { steps: BridgePlanStep[]; parallel: boolean } {
+  const first = steps[index];
+  const group = normalizeNonEmptyString(first.parallelGroup);
+  if (!group) return { steps: [first], parallel: false };
+
+  let end = index + 1;
+  while (end < steps.length && normalizeNonEmptyString(steps[end].parallelGroup) === group) {
+    end += 1;
+  }
+  const batch = steps.slice(index, end);
+  return { steps: batch, parallel: batch.length > 1 };
+}
+
+function evaluatePlanCondition(condition: BridgePlanCondition | undefined, state: BridgePlanExecutionState): boolean {
+  if (!condition) return true;
+
+  if ("all" in condition) {
+    return condition.all.every((entry) => evaluatePlanCondition(entry, state));
+  }
+  if ("any" in condition) {
+    return condition.any.some((entry) => evaluatePlanCondition(entry, state));
+  }
+  if ("not" in condition) {
+    return !evaluatePlanCondition(condition.not, state);
+  }
+
+  const value = resolvePlanRef(condition.ref, state);
+  if (condition.exists !== undefined) {
+    const exists = value !== undefined;
+    if (exists !== condition.exists) return false;
+  }
+  if (condition.equals !== undefined) {
+    return jsonEquals(toJsonValue(value), resolvePlanTemplates(condition.equals, state));
+  }
+  if (condition.notEquals !== undefined) {
+    return !jsonEquals(toJsonValue(value), resolvePlanTemplates(condition.notEquals, state));
+  }
+  return Boolean(value);
+}
+
+function resolvePlanSession(
+  session: BridgeRequest["session"] | undefined,
+  state: BridgePlanExecutionState
+): BridgeRequest["session"] | undefined {
+  if (!session) return undefined;
+  const resolved = resolvePlanTemplates(session as unknown as JsonValue, state);
+  if (!isJsonRecord(resolved) || typeof resolved.id !== "string") return session;
+  return resolved as unknown as BridgeRequest["session"];
+}
+
+function resolveTemplateString(value: string | undefined, state: BridgePlanExecutionState): string | undefined {
+  if (value === undefined) return undefined;
+  const resolved = resolvePlanTemplates(value, state);
+  return typeof resolved === "string" && resolved.trim() !== "" ? resolved : undefined;
+}
+
+function resolvePlanTemplates(value: JsonValue, state: BridgePlanExecutionState): JsonValue {
+  if (typeof value === "string") return resolveTemplateText(value, state);
+  if (Array.isArray(value)) return value.map((entry) => resolvePlanTemplates(entry, state));
+  if (isJsonRecord(value)) {
+    const output: JsonObject = {};
+    for (const [key, entry] of Object.entries(value)) {
+      if (entry !== undefined) output[key] = resolvePlanTemplates(entry as JsonValue, state);
+    }
+    return output;
+  }
+  return value;
+}
+
+function resolveTemplateText(value: string, state: BridgePlanExecutionState): JsonValue {
+  const exact = value.match(/^\$\{\s*([^}]+)\s*\}$/);
+  if (exact) return toJsonValue(resolvePlanRef(exact[1], state));
+
+  return value.replace(/\$\{\s*([^}]+)\s*\}/g, (_match, ref: string) => {
+    const resolved = resolvePlanRef(ref, state);
+    if (resolved === undefined || resolved === null) return "";
+    if (typeof resolved === "string") return resolved;
+    if (typeof resolved === "number" || typeof resolved === "boolean") return String(resolved);
+    return JSON.stringify(resolved);
+  });
+}
+
+function resolvePlanRef(ref: string, state: BridgePlanExecutionState): unknown {
+  const path = unwrapTemplateRef(ref);
+  return readPath(planContext(state), parsePath(path));
+}
+
+function unwrapTemplateRef(ref: string): string {
+  const trimmed = ref.trim();
+  const exact = trimmed.match(/^\$\{\s*([^}]+)\s*\}$/);
+  const path = exact ? exact[1].trim() : trimmed;
+  return path.startsWith("$.") ? path.slice(2) : path;
+}
+
+function planContext(state: BridgePlanExecutionState): JsonObject {
+  const steps: JsonObject = {};
+  for (const [stepId, result] of state.stepResults.entries()) {
+    const step: JsonObject = {
+      stepId,
+      status: result.status,
+      traceId: result.traceId,
+      response: toJsonValue(result.response)
+    };
+    if (result.runtime) step.runtime = result.runtime;
+    if ("result" in result.response) step.result = result.response.result;
+    if ("error" in result.response) step.error = toJsonValue(result.response.error);
+    steps[stepId] = step;
+  }
+  return {
+    plan: {
+      id: state.planId,
+      traceId: state.baseTraceId
+    },
+    steps
+  };
+}
+
+function parsePath(path: string): string[] {
+  const parts: string[] = [];
+  let current = "";
+  for (let index = 0; index < path.length; index += 1) {
+    const char = path[index];
+    if (char === ".") {
+      if (current) parts.push(current);
+      current = "";
+      continue;
+    }
+    if (char === "[") {
+      if (current) {
+        parts.push(current);
+        current = "";
+      }
+      const end = path.indexOf("]", index);
+      if (end === -1) break;
+      const raw = path.slice(index + 1, end).trim();
+      parts.push(raw.replace(/^["']|["']$/g, ""));
+      index = end;
+      continue;
+    }
+    current += char;
+  }
+  if (current) parts.push(current);
+  return parts.filter(Boolean);
+}
+
+function readPath(value: unknown, path: string[]): unknown {
+  let current = value;
+  for (const part of path) {
+    if (Array.isArray(current)) {
+      const index = Number(part);
+      if (!Number.isInteger(index) || index < 0 || index >= current.length) return undefined;
+      current = current[index];
+      continue;
+    }
+    if (!isJsonRecord(current) || !(part in current)) return undefined;
+    current = current[part];
+  }
+  return current;
+}
+
+function jsonEquals(left: JsonValue, right: JsonValue): boolean {
+  if (left === right) return true;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return Array.isArray(left) &&
+      Array.isArray(right) &&
+      left.length === right.length &&
+      left.every((entry, index) => jsonEquals(entry, right[index]));
+  }
+  if (isJsonRecord(left) || isJsonRecord(right)) {
+    if (!isJsonRecord(left) || !isJsonRecord(right)) return false;
+    const leftKeys = Object.keys(left).sort();
+    const rightKeys = Object.keys(right).sort();
+    return leftKeys.length === rightKeys.length &&
+      leftKeys.every((key, index) => key === rightKeys[index] && jsonEquals(left[key], right[key]));
+  }
+  return false;
+}
+
+function isJsonRecord(value: unknown): value is JsonObject {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 class ConcurrencyLimiter {

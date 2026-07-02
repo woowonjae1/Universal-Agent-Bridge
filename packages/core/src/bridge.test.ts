@@ -738,3 +738,161 @@ test("plan handoff follows the successful failover runtime", async () => {
   assert.deepEqual(result.steps.map((step) => step.runtime), ["healthy", "healthy"]);
   assert.equal(result.steps[1].response.result?.runtime, "healthy");
 });
+
+test("plan execution passes prior step output into later params", async () => {
+  const received: unknown[] = [];
+  const bridge = new AgentBridge();
+  bridge.register({
+    info: { id: "pipeline", name: "Pipeline Runtime" },
+    capabilities() {
+      return { pipeline: { write: true, methods: ["extract", "process"] } };
+    },
+    call(request) {
+      received.push(request.params);
+      if (request.method === "extract") {
+        return { value: "alpha", items: [1, 2], nested: { ok: true } };
+      }
+      return { received: request.params };
+    }
+  });
+
+  const result = await bridge.runPlan({
+    id: "dataflow_plan",
+    steps: [
+      {
+        id: "extract",
+        runtime: "pipeline",
+        method: "extract",
+        params: { source: "input" }
+      },
+      {
+        id: "process",
+        runtime: "pipeline",
+        method: "process",
+        params: {
+          value: "${steps.extract.result.value}",
+          items: "${steps.extract.result.items}",
+          nested: "${steps.extract.result.nested}",
+          text: "selected=${steps.extract.result.value}"
+        }
+      }
+    ]
+  }) as {
+    status: string;
+    steps: Array<{ response: { result?: { received?: unknown } } }>;
+  };
+
+  assert.equal(result.status, "success");
+  assert.deepEqual(received[1], {
+    value: "alpha",
+    items: [1, 2],
+    nested: { ok: true },
+    text: "selected=alpha"
+  });
+  assert.deepEqual(result.steps[1].response.result?.received, received[1]);
+});
+
+test("plan execution skips steps when declarative conditions do not match", async () => {
+  const calls: string[] = [];
+  const bridge = new AgentBridge();
+  bridge.register({
+    info: { id: "router", name: "Router Runtime" },
+    capabilities() {
+      return { pipeline: { write: true, methods: ["classify", "selected", "skipped"] } };
+    },
+    call(request) {
+      calls.push(request.method);
+      if (request.method === "classify") return { route: "selected" };
+      return { method: request.method };
+    }
+  });
+
+  const result = await bridge.runPlan({
+    id: "conditional_plan",
+    steps: [
+      { id: "classify", runtime: "router", method: "classify" },
+      {
+        id: "selected",
+        runtime: "router",
+        method: "selected",
+        when: { ref: "steps.classify.result.route", equals: "selected" }
+      },
+      {
+        id: "skipped",
+        runtime: "router",
+        method: "skipped",
+        when: { ref: "steps.classify.result.route", equals: "other" }
+      }
+    ]
+  }) as {
+    status: string;
+    steps: Array<{ status: string; response: { result?: { skipped?: boolean } } }>;
+  };
+
+  assert.equal(result.status, "success");
+  assert.deepEqual(calls, ["classify", "selected"]);
+  assert.deepEqual(result.steps.map((step) => step.status), ["success", "success", "skipped"]);
+  assert.equal(result.steps[2].response.result?.skipped, true);
+});
+
+test("plan execution runs adjacent parallel groups concurrently and joins their outputs", async () => {
+  let active = 0;
+  let maxActive = 0;
+  const bridge = new AgentBridge();
+  bridge.register({
+    info: { id: "worker", name: "Worker Runtime" },
+    capabilities() {
+      return { pipeline: { write: true, methods: ["fetch.a", "fetch.b", "merge"] } };
+    },
+    async call(request) {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      try {
+        if (request.method !== "merge") {
+          await new Promise((resolve) => setTimeout(resolve, 30));
+          return { value: request.method };
+        }
+        return { merged: request.params };
+      } finally {
+        active -= 1;
+      }
+    }
+  });
+
+  const result = await bridge.runPlan({
+    id: "parallel_plan",
+    steps: [
+      {
+        id: "left",
+        parallelGroup: "fanout",
+        runtime: "worker",
+        method: "fetch.a"
+      },
+      {
+        id: "right",
+        parallelGroup: "fanout",
+        runtime: "worker",
+        method: "fetch.b"
+      },
+      {
+        id: "merge",
+        runtime: "worker",
+        method: "merge",
+        params: {
+          left: "${steps.left.result.value}",
+          right: "${steps.right.result.value}"
+        }
+      }
+    ]
+  }) as {
+    status: string;
+    steps: Array<{ response: { result?: { merged?: unknown } } }>;
+  };
+
+  assert.equal(result.status, "success");
+  assert.equal(maxActive, 2);
+  assert.deepEqual(result.steps[2].response.result?.merged, {
+    left: "fetch.a",
+    right: "fetch.b"
+  });
+});
