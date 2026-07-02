@@ -40,7 +40,7 @@ OpenClaw Adapter | Hermes Adapter | HTTP JSON-RPC Adapter | Custom Adapter
 
 ## Current Status
 
-This repository starts with a working v0.1 foundation:
+The core control plane is implemented and covered by an automated test suite:
 
 - `@uab/protocol`: JSON-RPC style bridge envelope, responses, and error codes.
 - `@uab/a2ui`: A2UI dynamic UI envelope validation and sanitization.
@@ -52,7 +52,7 @@ This repository starts with a working v0.1 foundation:
 - `@uab/adapter-http-jsonrpc`: generic adapter for real agents that expose HTTP JSON-RPC.
 - `@uab/adapter-hermes`: Hermes Agent API Server adapter.
 - `@uab/adapter-openclaw`: OpenClaw Gateway adapter with CLI fallback.
-- `@uab/transport-http`: Node.js HTTP transport with `/rpc`, `/agui/runs`, `/cancel`, `/sessions`, `/health`, and `/runtimes`.
+- `@uab/transport-http`: Node.js HTTP transport with `/rpc`, `/agui/runs`, `/cancel`, `/sessions`, `/health`, `/runtimes`, `/health/runtimes`, `/metrics`, `/traces/{traceId}`, resource CRUD (`/resources`, `/resources/{id}`), `/broadcast`, and `/plans/run`.
 - `@uab/cli`: HTTP server and one-shot call commands for configured runtimes.
 
 ## Quick Start
@@ -162,6 +162,33 @@ curl -X POST http://127.0.0.1:8787/rpc ^
   -d "{\"jsonrpc\":\"2.0\",\"id\":\"a2a_send\",\"runtime\":\"a2a\",\"method\":\"a2a.message.send\",\"params\":{\"agentId\":\"example\",\"text\":\"hello\"}}"
 ```
 
+## Orchestration
+
+Beyond routing one call, the bridge coordinates multiple runtimes.
+
+Route by capability instead of a fixed runtime — the bridge picks a healthy runtime that advertises it, round-robins across candidates, and fails over when one is unavailable:
+
+```bash
+curl -X POST http://127.0.0.1:8787/rpc ^
+  -H "content-type: application/json" ^
+  -d "{\"jsonrpc\":\"2.0\",\"id\":\"cap_1\",\"capability\":\"chat\",\"method\":\"chat.send\",\"params\":{\"text\":\"hello\"}}"
+```
+
+Fan one request out to every runtime advertising a capability with `POST /broadcast`, and run a multi-step plan with `POST /plans/run`. Each step can target a `runtime`, route by `capability`, or hand off to a previous step's runtime; adjacent steps sharing a `parallelGroup` run concurrently, a `when` condition can skip a step, and `params`/`method`/`session`/`meta` can template earlier step results:
+
+```json
+{
+  "id": "research_pipeline",
+  "stopOnError": true,
+  "steps": [
+    { "id": "extract", "capability": "chat", "method": "chat.send", "params": { "text": "Extract the key facts" } },
+    { "id": "review", "handoff": { "fromStep": "extract" }, "method": "chat.send", "params": { "text": "Double-check the extraction" } }
+  ]
+}
+```
+
+The plan schema, template reference syntax, and condition grammar are documented in [docs/control-plane.md](docs/control-plane.md).
+
 ## Request Shape
 
 ```json
@@ -222,4 +249,6 @@ docs/
 - Expose UAB itself as an A2A server with an Agent Card.
 - Expand A2UI dynamic UI with form submission, richer layouts, and chart primitives.
 - Add adapter conformance tests for more real-agent method families.
-- Add token-based auth, pairing flows, and persistent audit logs.
+- Add token-based auth and pairing flows.
+- Deepen orchestration: step compensation/rollback (saga) and a dynamic planner that chooses steps from prior results.
+- Ship packaged OpenTelemetry/Prometheus exporters on top of the span-exporter hook.
