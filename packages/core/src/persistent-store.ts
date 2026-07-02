@@ -1,4 +1,5 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdir, rename, writeFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { isJsonObject, type JsonObject } from "@uab/protocol";
 import type { AuditLogEntry } from "./audit-log.js";
@@ -21,7 +22,11 @@ export interface BridgePersistentSnapshot {
 }
 
 export class JsonBridgeStore {
-  constructor(private readonly filePath: string) {}
+  private pending: BridgePersistentSnapshot | undefined;
+  private timer: NodeJS.Timeout | undefined;
+  private flushing: Promise<void> | undefined;
+
+  constructor(private readonly filePath: string, private readonly flushDelayMs = 50) {}
 
   load(): BridgePersistentSnapshot | undefined {
     try {
@@ -39,12 +44,44 @@ export class JsonBridgeStore {
     }
   }
 
-  save(snapshot: BridgePersistentSnapshot): void {
-    mkdirSync(dirname(this.filePath), { recursive: true });
-    writeFileSync(this.filePath, JSON.stringify({
+  scheduleSave(snapshot: BridgePersistentSnapshot): void {
+    this.pending = snapshot;
+    if (this.timer) return;
+    this.timer = setTimeout(() => {
+      this.timer = undefined;
+      void this.flush();
+    }, Math.max(0, this.flushDelayMs));
+    this.timer.unref?.();
+  }
+
+  async flush(): Promise<void> {
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = undefined;
+    }
+    if (this.flushing) {
+      await this.flushing;
+      if (!this.pending) return;
+    }
+    const snapshot = this.pending;
+    if (!snapshot) return;
+    this.pending = undefined;
+    this.flushing = this.writeSnapshot(snapshot).finally(() => {
+      this.flushing = undefined;
+    });
+    await this.flushing;
+    if (this.pending) await this.flush();
+  }
+
+  private async writeSnapshot(snapshot: BridgePersistentSnapshot): Promise<void> {
+    await mkdir(dirname(this.filePath), { recursive: true });
+    const payload = JSON.stringify({
       ...snapshot,
       updatedAt: new Date().toISOString()
-    }, null, 2) + "\n", "utf8");
+    }, null, 2) + "\n";
+    const tempPath = `${this.filePath}.tmp`;
+    await writeFile(tempPath, payload, "utf8");
+    await rename(tempPath, this.filePath);
   }
 }
 

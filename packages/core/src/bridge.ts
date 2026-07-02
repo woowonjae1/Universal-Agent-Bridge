@@ -23,13 +23,15 @@ import type {
 } from "@uab/protocol";
 import { AdapterRegistry } from "./adapter-registry.js";
 import { AuditLog, type AuditLogEntry } from "./audit-log.js";
-import { BridgeObservability, type BridgeTraceSnapshot } from "./observability.js";
+import { BridgeObservability, type BridgeSpanExporter, type BridgeTraceSnapshot } from "./observability.js";
 import { JsonBridgeStore, type StoredBridgeSession } from "./persistent-store.js";
 import {
   BridgeResourceIndex,
   extractBridgeResources,
   type BridgeResource,
-  type BridgeResourceFilter
+  type BridgeResourceFilter,
+  type BridgeResourcePatch,
+  type BridgeResourceWrite
 } from "./resources.js";
 import { AllowAllAccessPolicy, type AccessPolicy } from "./scope-policy.js";
 
@@ -46,6 +48,8 @@ export interface AgentBridgeOptions {
   maxAttempts?: number;
   retryBackoffMs?: number;
   circuitBreaker?: CircuitBreakerOptions;
+  persistenceFlushMs?: number;
+  spanExporter?: BridgeSpanExporter;
 }
 
 export interface CircuitBreakerOptions {
@@ -53,11 +57,36 @@ export interface CircuitBreakerOptions {
   cooldownMs?: number;
 }
 
+export interface BridgePlanStep {
+  id?: string;
+  runtime?: string;
+  capability?: string;
+  method: string;
+  params?: JsonValue;
+  session?: BridgeRequest["session"];
+  meta?: BridgeRequest["meta"];
+  handoff?: boolean | { fromStep?: string };
+}
+
+export interface BridgePlan {
+  id?: string;
+  traceId?: string;
+  stopOnError?: boolean;
+  steps: BridgePlanStep[];
+}
+
+export interface BridgePlanStepResult {
+  stepId: string;
+  runtime?: string;
+  response: BridgeResponse;
+  traceId: string;
+}
+
 export class AgentBridge {
   readonly registry = new AdapterRegistry();
   readonly audit: AuditLog;
   readonly resources: BridgeResourceIndex;
-  readonly observability = new BridgeObservability();
+  readonly observability: BridgeObservability;
   private readonly accessPolicy: AccessPolicy;
   private readonly logger?: BridgeLogger;
   private readonly sessionBindings = new Map<string, BridgeSessionBinding>();
@@ -74,7 +103,9 @@ export class AgentBridge {
   private readonly roundRobin = new Map<string, number>();
 
   constructor(options: AgentBridgeOptions = {}) {
-    this.store = options.persistencePath ? new JsonBridgeStore(options.persistencePath) : undefined;
+    this.store = options.persistencePath
+      ? new JsonBridgeStore(options.persistencePath, normalizePositiveNumber(options.persistenceFlushMs) ?? 50)
+      : undefined;
     const snapshot = this.store?.load();
     for (const session of snapshot?.sessions ?? []) {
       this.sessionBindings.set(session.id, session);
@@ -83,6 +114,7 @@ export class AgentBridge {
     this.logger = options.logger;
     this.audit = new AuditLog(options.auditLimit, snapshot?.audit);
     this.resources = new BridgeResourceIndex(snapshot?.resources, options.resourceLimit);
+    this.observability = new BridgeObservability(options.spanExporter);
     this.defaultTimeoutMs = normalizePositiveNumber(options.defaultTimeoutMs);
     this.runtimeConcurrency = options.runtimeConcurrency ?? {};
     this.globalLimiter = new ConcurrencyLimiter(options.maxConcurrentCalls);
@@ -369,6 +401,70 @@ export class AgentBridge {
     return toJsonValue({ capability: cap, results });
   }
 
+  async runPlan(plan: BridgePlan, principal?: Principal): Promise<JsonValue> {
+    const planId = normalizeNonEmptyString(plan.id) ?? `plan_${Date.now().toString(36)}`;
+    const baseTraceId = normalizeNonEmptyString(plan.traceId) ?? `trace_${planId}`;
+    const stepRuntimes = new Map<string, string>();
+    const results: BridgePlanStepResult[] = [];
+    let previousStepId: string | undefined;
+    let status: "success" | "error" = "success";
+
+    for (let index = 0; index < plan.steps.length; index += 1) {
+      const step = plan.steps[index];
+      const stepId = normalizeNonEmptyString(step.id) ?? `step_${index + 1}`;
+      const handoffFrom = typeof step.handoff === "object"
+        ? normalizeNonEmptyString(step.handoff.fromStep)
+        : step.handoff === true
+          ? previousStepId
+          : undefined;
+      const handoffRuntime = handoffFrom ? stepRuntimes.get(handoffFrom) : undefined;
+      const traceId = `${baseTraceId}.${stepId}`;
+      const request: BridgeRequest = {
+        jsonrpc: "2.0",
+        id: `${planId}_${stepId}`,
+        runtime: step.runtime ?? handoffRuntime,
+        capability: step.runtime ?? handoffRuntime ? undefined : step.capability,
+        session: step.session,
+        method: step.method,
+        params: step.params,
+        meta: {
+          ...step.meta,
+          traceId
+        }
+      };
+
+      if (step.handoff && !request.runtime) {
+        const response = createErrorResponse({
+          id: request.id,
+          code: BRIDGE_ERROR_CODES.invalidRequest,
+          message: `Plan step '${stepId}' requested handoff but no source runtime was available.`
+        });
+        results.push({ stepId, response, traceId });
+        status = "error";
+        if (plan.stopOnError !== false) break;
+        previousStepId = stepId;
+        continue;
+      }
+
+      const response = await this.call(request, principal);
+      const runtime = this.latestRuntimeForRequest(request.id, traceId);
+      if (runtime) stepRuntimes.set(stepId, runtime);
+      results.push({ stepId, runtime, response, traceId });
+      previousStepId = stepId;
+      if ("error" in response) {
+        status = "error";
+        if (plan.stopOnError !== false) break;
+      }
+    }
+
+    return toJsonValue({
+      id: planId,
+      status,
+      steps: results,
+      final: results.at(-1)?.response ?? null
+    });
+  }
+
   async listRuntimes(): Promise<JsonValue> {
     const runtimes = await Promise.all(
       this.registry.list().map(async (adapter) => ({
@@ -434,6 +530,28 @@ export class AgentBridge {
     return this.resources.toJson(filter);
   }
 
+  getResource(id: string): JsonValue {
+    return toJsonValue({ resource: this.resources.get(id) ?? null });
+  }
+
+  createResource(input: BridgeResourceWrite): JsonValue {
+    const resource = this.resources.create(input);
+    this.persistState();
+    return toJsonValue({ resource });
+  }
+
+  updateResource(id: string, patch: BridgeResourcePatch): JsonValue {
+    const resource = this.resources.update(id, patch);
+    if (resource) this.persistState();
+    return toJsonValue({ resource: resource ?? null });
+  }
+
+  deleteResource(id: string): boolean {
+    const deleted = this.resources.delete(id);
+    if (deleted) this.persistState();
+    return deleted;
+  }
+
   metrics(): JsonValue {
     return this.observability.toJson(this.concurrencySnapshot());
   }
@@ -452,6 +570,10 @@ export class AgentBridge {
     if (!call) return false;
     call.controller.abort(new Error(`Bridge request '${requestId}' was cancelled.`));
     return true;
+  }
+
+  async flushPersistence(): Promise<void> {
+    await this.store?.flush();
   }
 
   private async attemptCall(
@@ -810,10 +932,17 @@ export class AgentBridge {
     return snapshot;
   }
 
+  private latestRuntimeForRequest(requestId: BridgeRequest["id"], traceId: string): string | undefined {
+    const id = requestId ?? null;
+    return this.audit.snapshot()
+      .find((entry) => entry.traceId === traceId && entry.requestId === id)
+      ?.runtime;
+  }
+
   private persistState(): void {
     if (!this.store) return;
     try {
-      this.store.save({
+      this.store.scheduleSave({
         version: 1,
         sessions: [...this.sessionBindings.values()].map(toStoredSession),
         audit: this.audit.snapshot(),

@@ -8,7 +8,7 @@ import {
   type AgUiEvent,
   type AgUiRunAgentInput
 } from "@uab/ag-ui";
-import type { AgentBridge } from "@uab/core";
+import type { AgentBridge, BridgePlan, BridgeResourcePatch, BridgeResourceWrite } from "@uab/core";
 import {
   BRIDGE_ERROR_CODES,
   createErrorResponse
@@ -56,6 +56,11 @@ export function createHttpBridgeServer(options: HttpBridgeServerOptions): Server
         return;
       }
 
+      if (request.method === "GET" && url.pathname === "/health/runtimes") {
+        sendJson(response, 200, await options.bridge.listHealth(url.searchParams.get("runtime") ?? undefined));
+        return;
+      }
+
       if (request.method === "GET" && url.pathname === "/runtimes") {
         sendJson(response, 200, await options.bridge.listRuntimes());
         return;
@@ -89,6 +94,34 @@ export function createHttpBridgeServer(options: HttpBridgeServerOptions): Server
         return;
       }
 
+      if (request.method === "POST" && url.pathname === "/resources") {
+        const payload = await readJsonBody(request, maxBodyBytes);
+        sendJson(response, 201, options.bridge.createResource(readResourceWrite(payload)));
+        return;
+      }
+
+      if (url.pathname.startsWith("/resources/")) {
+        const resourceId = decodeURIComponent(url.pathname.slice("/resources/".length));
+        if (request.method === "GET") {
+          const payload = options.bridge.getResource(resourceId);
+          sendJson(response, hasResource(payload) ? 200 : 404, payload);
+          return;
+        }
+        if (request.method === "PATCH" || request.method === "PUT") {
+          const payload = await readJsonBody(request, maxBodyBytes);
+          const updated = options.bridge.updateResource(resourceId, readResourcePatch(payload));
+          sendJson(response, hasResource(updated) ? 200 : 404, updated);
+          return;
+        }
+        if (request.method === "DELETE") {
+          sendJson(response, 200, {
+            deleted: options.bridge.deleteResource(resourceId),
+            resourceId
+          });
+          return;
+        }
+      }
+
       if (request.method === "GET" && url.pathname === "/metrics") {
         sendJson(response, 200, options.bridge.metrics());
         return;
@@ -107,6 +140,19 @@ export function createHttpBridgeServer(options: HttpBridgeServerOptions): Server
           cancelled: options.bridge.cancel(requestId),
           requestId
         });
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/broadcast") {
+        const payload = await readJsonBody(request, maxBodyBytes);
+        const { capability, bridgeRequest } = readBroadcast(payload);
+        sendJson(response, 200, await options.bridge.broadcast(capability, bridgeRequest));
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/plans/run") {
+        const payload = await readJsonBody(request, maxBodyBytes);
+        sendJson(response, 200, await options.bridge.runPlan(readPlan(payload)));
         return;
       }
 
@@ -287,7 +333,7 @@ function writeCorsHeaders(response: ServerResponse, cors: CorsOptions | false): 
   response.setHeader("access-control-allow-origin", cors.origin ?? "*");
   response.setHeader(
     "access-control-allow-methods",
-    (cors.methods ?? ["GET", "POST", "OPTIONS"]).join(", ")
+    (cors.methods ?? ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"]).join(", ")
   );
   response.setHeader(
     "access-control-allow-headers",
@@ -329,6 +375,48 @@ function readCancelRequestId(payload: unknown): string {
   if (typeof value === "string" && value.trim() !== "") return value.trim();
   if (typeof value === "number" && Number.isFinite(value)) return String(value);
   throw new Error("Cancel request requires requestId.");
+}
+
+function readBroadcast(payload: unknown): { capability: string; bridgeRequest: Parameters<AgentBridge["broadcast"]>[1] } {
+  if (!isRecord(payload)) throw new Error("Broadcast request body must be an object.");
+  const capability = payload.capability;
+  if (typeof capability !== "string" || capability.trim() === "") {
+    throw new Error("Broadcast request requires capability.");
+  }
+  const bridgeRequest = payload.request;
+  if (!isRecord(bridgeRequest)) {
+    throw new Error("Broadcast request requires request.");
+  }
+  return {
+    capability: capability.trim(),
+    bridgeRequest: bridgeRequest as Parameters<AgentBridge["broadcast"]>[1]
+  };
+}
+
+function readPlan(payload: unknown): BridgePlan {
+  if (!isRecord(payload)) throw new Error("Plan request body must be an object.");
+  if (!Array.isArray(payload.steps)) throw new Error("Plan request requires steps.");
+  return payload as unknown as BridgePlan;
+}
+
+function readResourceWrite(payload: unknown): BridgeResourceWrite {
+  if (!isRecord(payload)) throw new Error("Resource body must be an object.");
+  if (payload.kind !== "memory" && payload.kind !== "artifact") {
+    throw new Error("Resource kind must be 'memory' or 'artifact'.");
+  }
+  return payload as unknown as BridgeResourceWrite;
+}
+
+function readResourcePatch(payload: unknown): BridgeResourcePatch {
+  if (!isRecord(payload)) throw new Error("Resource patch body must be an object.");
+  if (payload.kind !== undefined && payload.kind !== "memory" && payload.kind !== "artifact") {
+    throw new Error("Resource kind must be 'memory' or 'artifact'.");
+  }
+  return payload as unknown as BridgeResourcePatch;
+}
+
+function hasResource(payload: unknown): boolean {
+  return isRecord(payload) && payload.resource !== null && payload.resource !== undefined;
 }
 
 function readResourceKind(value: string | null): "memory" | "artifact" | undefined {

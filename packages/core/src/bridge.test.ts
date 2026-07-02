@@ -241,6 +241,7 @@ test("persists sessions audit and resources to a JSON store", async () => {
     method: "artifacts.list",
     meta: { traceId: "trace_persist" }
   });
+  await first.flushPersistence();
 
   const persisted = JSON.parse(await readFile(statePath, "utf8")) as {
     sessions: unknown[];
@@ -260,6 +261,76 @@ test("persists sessions audit and resources to a JSON store", async () => {
   assert.equal(resources.resources[0].id, "artifact:test:persist_session:artifact_persisted");
   assert.equal(trace.audit.length, 1);
   assert.equal(trace.resources.length, 1);
+});
+
+test("resources support bridge-owned CRUD operations", () => {
+  const bridge = new AgentBridge();
+  const created = bridge.createResource({
+    kind: "memory",
+    runtime: "manual",
+    name: "Operator note",
+    data: { text: "remember this" }
+  }) as { resource: { id: string; name: string } };
+
+  const fetched = bridge.getResource(created.resource.id) as { resource: { id: string; name: string } | null };
+  const updated = bridge.updateResource(created.resource.id, {
+    name: "Updated note"
+  }) as { resource: { id: string; name: string } | null };
+  const deleted = bridge.deleteResource(created.resource.id);
+  const missing = bridge.getResource(created.resource.id) as { resource: unknown };
+
+  assert.equal(fetched.resource?.name, "Operator note");
+  assert.equal(updated.resource?.name, "Updated note");
+  assert.equal(deleted, true);
+  assert.equal(missing.resource, null);
+});
+
+test("persistence writes are batched until flush", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "uab-state-batch-"));
+  const statePath = join(dir, "state.json");
+  const bridge = new AgentBridge({
+    persistencePath: statePath,
+    persistenceFlushMs: 60_000
+  });
+  bridge.register(adapter);
+
+  await bridge.handleRequest({
+    jsonrpc: "2.0",
+    id: "batch_req",
+    runtime: "test",
+    method: "system.ping"
+  });
+
+  await assert.rejects(readFile(statePath, "utf8"));
+  await bridge.flushPersistence();
+  const persisted = JSON.parse(await readFile(statePath, "utf8")) as { audit: unknown[] };
+  assert.equal(persisted.audit.length, 1);
+});
+
+test("exports dependency-free spans for audit entries", async () => {
+  const spans: Array<{ name: string; traceId: string; status: string; attributes: Record<string, unknown> }> = [];
+  const bridge = new AgentBridge({
+    spanExporter: {
+      export(span) {
+        spans.push(span);
+      }
+    }
+  });
+  bridge.register(adapter);
+
+  await bridge.handleRequest({
+    jsonrpc: "2.0",
+    id: "span_req",
+    runtime: "test",
+    method: "system.ping",
+    meta: { traceId: "trace_span" }
+  });
+
+  assert.equal(spans.length, 1);
+  assert.equal(spans[0].name, "uab.system.ping");
+  assert.equal(spans[0].traceId, "trace_span");
+  assert.equal(spans[0].status, "ok");
+  assert.equal(spans[0].attributes["uab.runtime"], "test");
 });
 
 test("rejects switching an existing session to another runtime", async () => {
@@ -594,4 +665,39 @@ test("broadcast fans out to every runtime advertising the capability", async () 
   assert.equal(result.capability, "chat");
   assert.equal(result.results.length, 2);
   assert.deepEqual(result.results.map((entry) => entry.runtime).sort(), ["alpha", "beta"]);
+});
+
+test("plan execution supports runtime handoff between steps", async () => {
+  const calls: string[] = [];
+  const bridge = new AgentBridge();
+  bridge.register(chatAdapter("alpha", (method) => {
+    calls.push(`alpha:${method}`);
+    return { runtime: "alpha", method };
+  }));
+
+  const result = await bridge.runPlan({
+    id: "handoff_plan",
+    steps: [
+      {
+        id: "first",
+        capability: "chat",
+        method: "chat.send",
+        params: { text: "draft" }
+      },
+      {
+        id: "second",
+        handoff: true,
+        method: "chat.followup",
+        params: { text: "continue" }
+      }
+    ]
+  }) as {
+    status: string;
+    steps: Array<{ runtime?: string; response: { result?: { method?: string } } }>;
+  };
+
+  assert.equal(result.status, "success");
+  assert.deepEqual(calls, ["alpha:chat.send", "alpha:chat.followup"]);
+  assert.deepEqual(result.steps.map((step) => step.runtime), ["alpha", "alpha"]);
+  assert.equal(result.steps[1].response.result?.method, "chat.followup");
 });

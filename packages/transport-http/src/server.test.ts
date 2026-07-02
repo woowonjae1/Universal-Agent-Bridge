@@ -352,6 +352,106 @@ test("HTTP transport exposes resources metrics and trace snapshots", async () =>
   }
 });
 
+test("HTTP transport exposes health broadcast resource CRUD and plan endpoints", async () => {
+  const bridge = new AgentBridge({
+    adapters: [
+      {
+        ...adapter,
+        info: { id: "alpha", name: "alpha" },
+        capabilities() {
+          return { chat: { write: true, methods: ["chat.send"] } };
+        },
+        health() {
+          return { status: "ok" };
+        },
+        call(request) {
+          return { runtime: "alpha", method: request.method };
+        }
+      },
+      {
+        ...adapter,
+        info: { id: "beta", name: "beta" },
+        capabilities() {
+          return { chat: { write: true, methods: ["chat.send"] } };
+        },
+        call(request) {
+          return { runtime: "beta", method: request.method };
+        }
+      }
+    ]
+  });
+  const server = createHttpBridgeServer({ bridge });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+
+  try {
+    const port = readPort(server);
+    const healthResponse = await fetch(`http://127.0.0.1:${port}/health/runtimes`);
+    const health = await healthResponse.json() as { runtimes: Array<{ runtime: string }> };
+
+    const broadcastResponse = await fetch(`http://127.0.0.1:${port}/broadcast`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        capability: "chat",
+        request: {
+          jsonrpc: "2.0",
+          id: "http_broadcast",
+          method: "chat.send"
+        }
+      })
+    });
+    const broadcast = await broadcastResponse.json() as { results: Array<{ runtime: string }> };
+
+    const createResponse = await fetch(`http://127.0.0.1:${port}/resources`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        kind: "artifact",
+        runtime: "manual",
+        name: "HTTP created artifact"
+      })
+    });
+    const created = await createResponse.json() as { resource: { id: string; name: string } };
+    const resourceUrl = `http://127.0.0.1:${port}/resources/${encodeURIComponent(created.resource.id)}`;
+    const getResponse = await fetch(resourceUrl);
+    const fetched = await getResponse.json() as { resource: { name: string } | null };
+    const patchResponse = await fetch(resourceUrl, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "HTTP updated artifact" })
+    });
+    const patched = await patchResponse.json() as { resource: { name: string } | null };
+    const deleteResponse = await fetch(resourceUrl, { method: "DELETE" });
+    const deleted = await deleteResponse.json() as { deleted: boolean };
+
+    const planResponse = await fetch(`http://127.0.0.1:${port}/plans/run`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        id: "http_plan",
+        steps: [
+          { id: "first", capability: "chat", method: "chat.send" },
+          { id: "second", handoff: true, method: "chat.followup" }
+        ]
+      })
+    });
+    const plan = await planResponse.json() as { status: string; steps: Array<{ runtime?: string }> };
+
+    assert.equal(health.runtimes.length, 2);
+    assert.deepEqual(broadcast.results.map((entry) => entry.runtime).sort(), ["alpha", "beta"]);
+    assert.equal(createResponse.status, 201);
+    assert.equal(fetched.resource?.name, "HTTP created artifact");
+    assert.equal(patched.resource?.name, "HTTP updated artifact");
+    assert.equal(deleted.deleted, true);
+    assert.equal(plan.status, "success");
+    assert.ok(["alpha", "beta"].includes(plan.steps[0]?.runtime ?? ""));
+    assert.equal(plan.steps[1]?.runtime, plan.steps[0]?.runtime);
+  } finally {
+    await close(server);
+  }
+});
+
 test("HTTP transport cancels active RPC requests", async () => {
   const bridge = new AgentBridge({
     adapters: [{

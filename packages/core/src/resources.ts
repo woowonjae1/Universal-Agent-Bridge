@@ -34,6 +34,24 @@ export interface BridgeResourceFilter {
   limit?: number;
 }
 
+export interface BridgeResourceWrite {
+  id?: string;
+  kind: BridgeResourceKind;
+  runtime?: string;
+  sourceMethod?: string;
+  requestId?: BridgeRequestId;
+  traceId?: string;
+  sessionId?: string;
+  uri?: string;
+  name?: string;
+  mimeType?: string;
+  sizeBytes?: number;
+  metadata?: JsonObject;
+  data?: JsonValue;
+}
+
+export type BridgeResourcePatch = Partial<Omit<BridgeResourceWrite, "id">>;
+
 export class BridgeResourceIndex {
   private readonly resources = new Map<string, BridgeResource>();
 
@@ -53,6 +71,39 @@ export class BridgeResourceIndex {
       updatedAt: resource.updatedAt
     });
     this.enforceLimit();
+  }
+
+  create(input: BridgeResourceWrite): BridgeResource {
+    const now = new Date().toISOString();
+    const resource = normalizeResourceWrite(input, now);
+    this.upsert(resource);
+    return resource;
+  }
+
+  get(id: string): BridgeResource | undefined {
+    return this.resources.get(id);
+  }
+
+  update(id: string, patch: BridgeResourcePatch): BridgeResource | undefined {
+    const existing = this.resources.get(id);
+    if (!existing) return undefined;
+    const updated: BridgeResource = {
+      ...existing,
+      ...removeUndefined(patch),
+      id: existing.id,
+      kind: patch.kind ?? existing.kind,
+      runtime: patch.runtime ?? existing.runtime,
+      sourceMethod: patch.sourceMethod ?? existing.sourceMethod,
+      requestId: patch.requestId ?? existing.requestId,
+      traceId: patch.traceId ?? existing.traceId,
+      updatedAt: new Date().toISOString()
+    };
+    this.resources.set(id, updated);
+    return updated;
+  }
+
+  delete(id: string): boolean {
+    return this.resources.delete(id);
   }
 
   list(filter: BridgeResourceFilter = {}): BridgeResourceSnapshot {
@@ -85,6 +136,36 @@ export class BridgeResourceIndex {
       this.resources.delete(resource.id);
     }
   }
+}
+
+function normalizeResourceWrite(input: BridgeResourceWrite, now: string): BridgeResource {
+  const runtime = normalizeWriteString(input.runtime) ?? "bridge";
+  const sourceMethod = normalizeWriteString(input.sourceMethod) ?? "resources.create";
+  const traceId = normalizeWriteString(input.traceId) ?? `trace_resource_${Date.now().toString(36)}`;
+  const sourceId = input.id ?? input.uri ?? input.name ?? `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+  return {
+    id: input.id ?? stableResourceId(input.kind, runtime, input.sessionId, sourceId),
+    kind: input.kind,
+    runtime,
+    sourceMethod,
+    requestId: input.requestId ?? null,
+    traceId,
+    sessionId: input.sessionId,
+    uri: input.uri,
+    name: input.name,
+    mimeType: input.mimeType,
+    sizeBytes: input.sizeBytes,
+    metadata: input.metadata,
+    data: input.data,
+    createdAt: now,
+    updatedAt: now
+  };
+}
+
+function removeUndefined<T extends Record<string, unknown>>(value: T): Partial<T> {
+  return Object.fromEntries(
+    Object.entries(value).filter(([, entry]) => entry !== undefined)
+  ) as Partial<T>;
 }
 
 export interface ResourceExtractionContext {
@@ -218,6 +299,10 @@ function hasAnyKey(value: JsonObject, keys: string[]): boolean {
 }
 
 function readString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() !== "" ? value.trim() : undefined;
+}
+
+function normalizeWriteString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() !== "" ? value.trim() : undefined;
 }
 
