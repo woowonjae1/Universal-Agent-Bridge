@@ -2,7 +2,7 @@
 
 `@uab/adapter-openclaw` connects Universal Agent Bridge to OpenClaw.
 
-For external tools, OpenClaw recommends the Gateway WebSocket protocol rather than importing Plugin SDK internals. This adapter follows that boundary and exposes Gateway RPC methods through the same UAB request envelope used by Hermes, mock runtimes, and custom agents.
+For external tools, OpenClaw recommends the Gateway WebSocket protocol rather than importing Plugin SDK internals. This adapter follows that boundary and exposes Gateway RPC methods through the same UAB request envelope used by Hermes and custom agents.
 
 ## Gateway Mode
 

@@ -1,7 +1,7 @@
 {
   "name": "@uab/cli",
   "version": "0.1.0",
-  "description": "CLI for Universal Agent Bridge demos and local development.",
+  "description": "CLI for serving and calling real Universal Agent Bridge runtimes.",
   "type": "module",
   "bin": {
     "uab": "./dist/index.js"
@@ -16,14 +16,12 @@
   },
   "files": ["dist"],
   "scripts": {
-    "demo": "node ./dist/index.js demo",
     "serve": "node ./dist/index.js serve"
   },
   "dependencies": {
     "@uab/a2a": "file:../a2a",
     "@uab/adapter-hermes": "file:../adapter-hermes",
     "@uab/adapter-http-jsonrpc": "file:../adapter-http-jsonrpc",
-    "@uab/adapter-mock": "file:../adapter-mock",
     "@uab/adapter-openclaw": "file:../adapter-openclaw",
     "@uab/core": "file:../core",
     "@uab/mcp": "file:../mcp",

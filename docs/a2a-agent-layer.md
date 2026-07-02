@@ -30,7 +30,7 @@ UAB exposes these methods:
 
 ## Example Agent
 
-Start the included demo A2A agent:
+Start the included example A2A agent:
 
 ```powershell
 npm run example:a2a -- --port 9010

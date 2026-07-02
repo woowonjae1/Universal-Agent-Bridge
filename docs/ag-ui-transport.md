@@ -20,16 +20,16 @@ The endpoint accepts an AG-UI-style run input. UAB-specific routing lives under 
 
 ```json
 {
-  "threadId": "thread_mock",
-  "runId": "run_demo",
+  "threadId": "thread_openclaw",
+  "runId": "run_status",
   "state": {},
   "messages": [],
   "tools": [],
   "context": [],
   "forwardedProps": {
     "uab": {
-      "runtime": "mock",
-      "method": "sessions.list",
+      "runtime": "openclaw",
+      "method": "status",
       "params": {}
     }
   }
@@ -39,13 +39,13 @@ The endpoint accepts an AG-UI-style run input. UAB-specific routing lives under 
 The stream emits newline-delimited SSE frames where each `data:` payload is an AG-UI-style event:
 
 ```text
-data: {"type":"RUN_STARTED","threadId":"thread_mock","runId":"run_demo"}
+data: {"type":"RUN_STARTED","threadId":"thread_openclaw","runId":"run_status"}
 
-data: {"type":"STATE_SNAPSHOT","snapshot":{"runtime":"mock","method":"sessions.list","status":"calling"}}
+data: {"type":"STATE_SNAPSHOT","snapshot":{"runtime":"openclaw","method":"status","status":"calling"}}
 
-data: {"type":"TEXT_MESSAGE_CONTENT","messageId":"msg_run_demo","delta":"..."}
+data: {"type":"TEXT_MESSAGE_CONTENT","messageId":"msg_run_status","delta":"..."}
 
-data: {"type":"RUN_FINISHED","threadId":"thread_mock","runId":"run_demo"}
+data: {"type":"RUN_FINISHED","threadId":"thread_openclaw","runId":"run_status"}
 ```
 
 ## Current Mapping
@@ -95,7 +95,10 @@ Dashboard, desktop, mobile, and device clients can consume one event stream rega
 
 ## Smoke Test
 
+Configure a real runtime before sending the stream request. For example, for OpenClaw CLI fallback:
+
 ```powershell
+$env:UAB_OPENCLAW_MODE="cli"
 npm run serve -- --port 8787
 ```
 
@@ -103,5 +106,5 @@ npm run serve -- --port 8787
 curl.exe -N -X POST http://127.0.0.1:8787/agui/runs `
   -H "content-type: application/json" `
   -H "accept: text/event-stream" `
-  -d "{\"threadId\":\"thread_mock\",\"runId\":\"run_demo\",\"state\":{},\"messages\":[],\"tools\":[],\"context\":[],\"forwardedProps\":{\"uab\":{\"runtime\":\"mock\",\"method\":\"sessions.list\",\"params\":{}}}}"
+  -d "{\"threadId\":\"thread_openclaw\",\"runId\":\"run_status\",\"state\":{},\"messages\":[],\"tools\":[],\"context\":[],\"forwardedProps\":{\"uab\":{\"runtime\":\"openclaw\",\"method\":\"status\",\"params\":{}}}}"
 ```

@@ -28,5 +28,4 @@ Transport -> AgentBridge.handleRequest -> AdapterRegistry -> Runtime Adapter
 - Transport-specific code belongs in transport packages.
 - Permissions are evaluated before adapter calls.
 - Capability discovery is the public contract for heterogeneous runtimes.
-- The mock adapter must remain useful enough to test clients without a real runtime.
-
+- Production and local development paths should use real runtime adapters or explicit local test fixtures.

@@ -18,8 +18,6 @@ const targets = [
   "packages/adapter-sdk/tsconfig.tsbuildinfo",
   "packages/core/dist",
   "packages/core/tsconfig.tsbuildinfo",
-  "packages/adapter-mock/dist",
-  "packages/adapter-mock/tsconfig.tsbuildinfo",
   "packages/adapter-http-jsonrpc/dist",
   "packages/adapter-http-jsonrpc/tsconfig.tsbuildinfo",
   "packages/adapter-hermes/dist",

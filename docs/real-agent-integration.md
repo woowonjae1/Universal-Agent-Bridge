@@ -1,6 +1,6 @@
 # Real Agent Integration
 
-Universal Agent Bridge reaches real agents through adapters. The dashboard, protocol, audit log, method catalog, and transports do not need to know whether the runtime is Mock, OpenClaw, Hermes, or another system.
+Universal Agent Bridge reaches real agents through adapters. The dashboard, protocol, audit log, method catalog, and transports do not need to know whether the runtime is OpenClaw, Hermes, an HTTP JSON-RPC agent, or another real agent system.
 
 ## Option 1: HTTP JSON-RPC Adapter
 
@@ -26,7 +26,7 @@ $env:UAB_HTTP_RUNTIME_NAME="Example Agent"
 npm run serve -- --port 8787
 ```
 
-The dashboard will then show both `mock` and `example-agent`.
+The dashboard will then show `example-agent` as a registered runtime.
 
 ## Runtime RPC Shape
 

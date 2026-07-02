@@ -17,7 +17,7 @@ Universal Agent Bridge Core
         |
 Adapter Registry
         |
-OpenClaw Adapter | Hermes Adapter | Mock Adapter | Custom Adapter
+OpenClaw Adapter | Hermes Adapter | HTTP JSON-RPC Adapter | Custom Adapter
 ```
 
 ## Current Status
@@ -31,12 +31,11 @@ This repository starts with a working v0.1 foundation:
 - `@uab/a2a`: A2A remote agent registry and JSON-RPC client layer.
 - `@uab/adapter-sdk`: runtime adapter contract and shared capability types.
 - `@uab/core`: adapter registry, session-aware request router, scoped access policy, cancellation, timeouts, and concurrency limits.
-- `@uab/adapter-mock`: in-memory adapter for demos and tests.
 - `@uab/adapter-http-jsonrpc`: generic adapter for real agents that expose HTTP JSON-RPC.
 - `@uab/adapter-hermes`: Hermes Agent API Server adapter.
 - `@uab/adapter-openclaw`: OpenClaw Gateway adapter with CLI fallback.
 - `@uab/transport-http`: Node.js HTTP transport with `/rpc`, `/agui/runs`, `/cancel`, `/sessions`, `/health`, and `/runtimes`.
-- `@uab/cli`: local demo, HTTP server, and one-shot call commands.
+- `@uab/cli`: HTTP server and one-shot call commands for configured runtimes.
 
 ## Quick Start
 
@@ -46,17 +45,13 @@ npm run build
 npm test
 ```
 
-Run the mock runtime demo:
-
-```bash
-npm run demo
-```
-
 Start the HTTP bridge:
 
 ```bash
 npm run serve -- --port 8787
 ```
+
+Configure at least one real runtime before starting the bridge. Without runtime environment variables, `/runtimes` will be empty.
 
 Start the dashboard UI in a second terminal:
 
@@ -98,12 +93,12 @@ $env:UAB_OPENCLAW_MODE="cli"
 npm run serve -- --port 8787
 ```
 
-Call the mock runtime:
+Call OpenClaw through the bridge:
 
 ```bash
 curl -X POST http://127.0.0.1:8787/rpc ^
   -H "content-type: application/json" ^
-  -d "{\"jsonrpc\":\"2.0\",\"id\":\"req_1\",\"runtime\":\"mock\",\"method\":\"sessions.list\",\"params\":{}}"
+  -d "{\"jsonrpc\":\"2.0\",\"id\":\"req_1\",\"runtime\":\"openclaw\",\"method\":\"status\",\"params\":{}}"
 ```
 
 Stream the same call through AG-UI SSE:
@@ -112,16 +107,7 @@ Stream the same call through AG-UI SSE:
 curl -N -X POST http://127.0.0.1:8787/agui/runs ^
   -H "content-type: application/json" ^
   -H "accept: text/event-stream" ^
-  -d "{\"threadId\":\"thread_mock\",\"runId\":\"run_demo\",\"state\":{},\"messages\":[],\"tools\":[],\"context\":[],\"forwardedProps\":{\"uab\":{\"runtime\":\"mock\",\"method\":\"sessions.list\",\"params\":{}}}}"
-```
-
-Render a dynamic A2UI surface through AG-UI:
-
-```bash
-curl -N -X POST http://127.0.0.1:8787/agui/runs ^
-  -H "content-type: application/json" ^
-  -H "accept: text/event-stream" ^
-  -d "{\"threadId\":\"thread_mock\",\"runId\":\"run_a2ui\",\"state\":{},\"messages\":[],\"tools\":[],\"context\":[],\"forwardedProps\":{\"uab\":{\"runtime\":\"mock\",\"method\":\"ui.surface.demo\",\"params\":{\"title\":\"Agent handoff\",\"status\":\"ready\"}}}}"
+  -d "{\"threadId\":\"thread_openclaw\",\"runId\":\"run_status\",\"state\":{},\"messages\":[],\"tools\":[],\"context\":[],\"forwardedProps\":{\"uab\":{\"runtime\":\"openclaw\",\"method\":\"status\",\"params\":{}}}}"
 ```
 
 Register an MCP stdio tool server:
@@ -164,7 +150,7 @@ curl -X POST http://127.0.0.1:8787/rpc ^
 {
   "jsonrpc": "2.0",
   "id": "req_001",
-  "runtime": "mock",
+  "runtime": "openclaw",
   "session": {
     "id": "project-main",
     "action": "create"
@@ -198,7 +184,7 @@ packages/
   a2a/
   adapter-sdk/
   core/
-  adapter-mock/
+  adapter-http-jsonrpc/
   adapter-hermes/
   adapter-openclaw/
   transport-http/

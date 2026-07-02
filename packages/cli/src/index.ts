@@ -2,7 +2,6 @@
 import { createA2aAdapter, readA2aAgentConfigsFromEnv } from "@uab/a2a";
 import { createHermesAdapter } from "@uab/adapter-hermes";
 import { createHttpJsonRpcAdapter } from "@uab/adapter-http-jsonrpc";
-import { createMockAdapter } from "@uab/adapter-mock";
 import {
   createOpenClawAdapter,
   type OpenClawDeviceIdentityOptions
@@ -19,9 +18,6 @@ async function main(argv: string[]): Promise<void> {
   const [command = "help", ...args] = argv;
 
   switch (command) {
-    case "demo":
-      await runDemo();
-      return;
     case "call":
       await runCall(args);
       return;
@@ -40,13 +36,12 @@ async function main(argv: string[]): Promise<void> {
   }
 }
 
-function createDemoBridge(): AgentBridge {
+function createBridge(): AgentBridge {
   const bridge = new AgentBridge({
     auditLimit: readEnvNumber("UAB_AUDIT_LIMIT", 200),
     resourceLimit: readEnvNumber("UAB_RESOURCE_LIMIT", 500),
     persistencePath: process.env.UAB_STATE_PATH
   });
-  bridge.register(createMockAdapter());
   registerHttpRuntimeFromEnv(bridge);
   registerHermesRuntimeFromEnv(bridge);
   registerOpenClawRuntimeFromEnv(bridge);
@@ -55,45 +50,13 @@ function createDemoBridge(): AgentBridge {
   return bridge;
 }
 
-async function runDemo(): Promise<void> {
-  const bridge = createDemoBridge();
-  const requests: BridgeRequest[] = [
-    {
-      jsonrpc: "2.0",
-      id: "demo_ping",
-      runtime: "mock",
-      method: "system.ping",
-      params: { message: "hello" }
-    },
-    {
-      jsonrpc: "2.0",
-      id: "demo_sessions",
-      runtime: "mock",
-      method: "sessions.list",
-      params: {}
-    },
-    {
-      jsonrpc: "2.0",
-      id: "demo_models",
-      runtime: "mock",
-      method: "models.list",
-      params: {}
-    }
-  ];
-
-  for (const request of requests) {
-    const response = await bridge.handleRequest(request);
-    console.log(JSON.stringify(response, null, 2));
-  }
-}
-
 async function runCall(args: string[]): Promise<void> {
   const [runtime, method, paramsJson] = args;
   if (!runtime || !method) {
     throw new Error("Usage: uab call <runtime> <method> [jsonParams]");
   }
 
-  const bridge = createDemoBridge();
+  const bridge = createBridge();
   const request: BridgeRequest = {
     jsonrpc: "2.0",
     id: `cli_${Date.now().toString(36)}`,
@@ -109,12 +72,13 @@ async function runCall(args: string[]): Promise<void> {
 async function runServe(args: string[]): Promise<void> {
   const port = readNumberArg(args, "--port", 8787);
   const host = readStringArg(args, "--host", "127.0.0.1");
-  const bridge = createDemoBridge();
+  const bridge = createBridge();
   const server = createHttpBridgeServer({ bridge });
 
   await listen(server, { host, port });
   console.log(`Universal Agent Bridge listening on http://${host}:${port}`);
-  console.log(`Registered runtimes: ${bridge.registry.list().map((adapter) => adapter.info.id).join(", ")}`);
+  const runtimes = bridge.registry.list().map((adapter) => adapter.info.id);
+  console.log(`Registered runtimes: ${runtimes.length > 0 ? runtimes.join(", ") : "none"}`);
 }
 
 function registerHttpRuntimeFromEnv(bridge: AgentBridge): void {
@@ -335,14 +299,12 @@ function printHelp(): void {
   console.log(`Universal Agent Bridge
 
 Usage:
-  uab demo
   uab serve [--host 127.0.0.1] [--port 8787]
   uab call <runtime> <method> [jsonParams]
 
 Examples:
-  uab demo
-  uab call mock sessions.list "{}"
   uab serve --port 8787
+  uab call openclaw status "{}"
 
 External HTTP runtime:
   UAB_HTTP_RUNTIME_URL=http://127.0.0.1:9000 uab serve

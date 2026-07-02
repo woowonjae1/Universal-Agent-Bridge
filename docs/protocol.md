@@ -8,7 +8,7 @@ Universal Agent Bridge uses a JSON-RPC style envelope with an explicit `runtime`
 {
   "jsonrpc": "2.0",
   "id": "req_001",
-  "runtime": "mock",
+  "runtime": "openclaw",
   "method": "sessions.list",
   "params": {},
   "meta": {
@@ -54,4 +54,3 @@ Universal Agent Bridge uses a JSON-RPC style envelope with an explicit `runtime`
 - `-32003`: permission denied
 - `-32004`: adapter unavailable
 - `-32005`: timeout
-

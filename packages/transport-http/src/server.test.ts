@@ -20,8 +20,8 @@ const adapter: AgentRuntimeAdapter = {
     return {
       sessions: [
         {
-          id: "session_demo",
-          title: "Demo session"
+          id: "session_test",
+          title: "Test session"
         }
       ]
     };
@@ -236,7 +236,7 @@ test("HTTP transport forwards A2UI envelopes through AG-UI custom events", async
         forwardedProps: {
           uab: {
             runtime: "a2ui-test",
-            method: "ui.surface.demo",
+            method: "ui.surface.render",
             params: {}
           }
         }

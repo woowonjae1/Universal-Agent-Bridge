@@ -194,19 +194,11 @@ const A2UI_COMPONENT_TYPES = new Set<string>([
 const defaultApiBase =
   localStorage.getItem("uab.apiBase") ?? "http://127.0.0.1:8787";
 
-const sampleParams: Record<string, string> = {
-  "system.ping": JSON.stringify({ message: "hello" }, null, 2),
-  "sessions.get": JSON.stringify({ id: "session_demo" }, null, 2),
-  "sessions.create": JSON.stringify({ title: "New session" }, null, 2),
-  "models.set": JSON.stringify({ model: "mock-balanced" }, null, 2),
-  "ui.surface.demo": JSON.stringify({ title: "Agent handoff", status: "ready" }, null, 2)
-};
-
 export function App() {
   const [apiBase, setApiBase] = useState(defaultApiBase);
   const [runtimes, setRuntimes] = useState<RuntimeInfo[]>([]);
-  const [selectedRuntime, setSelectedRuntime] = useState("mock");
-  const [method, setMethod] = useState("sessions.list");
+  const [selectedRuntime, setSelectedRuntime] = useState("");
+  const [method, setMethod] = useState("");
   const [params, setParams] = useState("{}");
   const [response, setResponse] = useState<BridgeResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -257,6 +249,8 @@ export function App() {
       setRuntimes(data.runtimes);
       if (data.runtimes.length > 0 && !data.runtimes.some((item) => item.id === selectedRuntime)) {
         setSelectedRuntime(data.runtimes[0].id);
+      } else if (data.runtimes.length === 0) {
+        setSelectedRuntime("");
       }
       setStatus("online");
       pushLog("success", "Runtimes refreshed", `${data.runtimes.length} runtime(s) available`);
@@ -276,6 +270,12 @@ export function App() {
   }
 
   async function refreshMethods() {
+    if (!selectedRuntime) {
+      setMethods([]);
+      setMethod("");
+      return;
+    }
+
     try {
       const data = await requestJson<MethodsResponse>(
         `${apiBase}/methods?runtime=${encodeURIComponent(selectedRuntime)}`
@@ -285,8 +285,12 @@ export function App() {
       setMethods(nextMethods);
       if (nextMethods.length > 0 && !nextMethods.some((entry) => entry.name === method)) {
         setMethod(nextMethods[0].name);
+      } else if (nextMethods.length === 0) {
+        setMethod("");
       }
     } catch (error) {
+      setMethods([]);
+      setMethod("");
       pushLog("error", "Methods unavailable", errorToMessage(error));
     }
   }
@@ -605,11 +609,11 @@ export function App() {
               </label>
 
               <div className="toolbar">
-                <button className="primary-button" onClick={sendRpc} disabled={loading || !selectedRuntime}>
+                <button className="primary-button" onClick={sendRpc} disabled={loading || !selectedRuntime || !method}>
                   {loading ? <Zap size={17} aria-hidden="true" /> : <Play size={17} aria-hidden="true" />}
                   Send
                 </button>
-                <button className="secondary-button" onClick={sendAgUiRun} disabled={streaming || !selectedRuntime}>
+                <button className="secondary-button" onClick={sendAgUiRun} disabled={streaming || !selectedRuntime || !method}>
                   {streaming ? <Zap size={16} aria-hidden="true" /> : <Radio size={16} aria-hidden="true" />}
                   AG-UI
                 </button>
@@ -1130,7 +1134,7 @@ function formatParamsExample(value: unknown, method: string): string {
   if (value !== undefined) {
     return JSON.stringify(value, null, 2);
   }
-  return sampleParams[method] ?? "{}";
+  return "{}";
 }
 
 function formatAgUiEvent(event: AgUiEvent): string {

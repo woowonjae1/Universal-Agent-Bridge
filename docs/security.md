@@ -25,7 +25,7 @@ A principal represents a caller:
 {
   "id": "user_1",
   "scopes": ["sessions:read", "models:write"],
-  "runtimeAllowlist": ["mock", "openclaw"]
+  "runtimeAllowlist": ["openclaw", "hermes"]
 }
 ```
 
@@ -36,4 +36,3 @@ A principal represents a caller:
 - Per-runtime allowlists.
 - Audit log with trace id, principal id, runtime, method, status, and duration.
 - Dangerous-operation confirmation for admin methods.
-

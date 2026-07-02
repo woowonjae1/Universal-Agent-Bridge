@@ -9,7 +9,6 @@
     { "path": "../protocol" },
     { "path": "../adapter-sdk" },
     { "path": "../core" },
-    { "path": "../adapter-mock" },
     { "path": "../adapter-http-jsonrpc" },
     { "path": "../adapter-hermes" },
     { "path": "../adapter-openclaw" },

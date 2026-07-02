@@ -83,22 +83,9 @@ Supported Dashboard components:
 - `column`
 - `divider`
 
-## Try It
+## Runtime Output
 
-Start the bridge and dashboard:
-
-```powershell
-npm run serve -- --port 8787
-npm run dashboard
-```
-
-In the Dashboard, choose:
-
-- runtime: `mock`
-- method: `ui.surface.demo`
-- action: `AG-UI`
-
-The AG-UI stream will include:
+When a real adapter returns A2UI, the AG-UI stream includes:
 
 ```json
 {
@@ -107,7 +94,7 @@ The AG-UI stream will include:
   "value": {
     "version": "1.0",
     "type": "createSurface",
-    "surfaceId": "mock-agent-surface"
+    "surfaceId": "agent-review"
   }
 }
 ```

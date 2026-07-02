@@ -148,7 +148,7 @@ const DEFAULT_METHODS: RuntimeMethodDefinition[] = [
     description: "Start an OpenClaw agent request.",
     capability: "agent",
     risk: "write",
-    paramsExample: { prompt: "Summarize this workspace", sessionKey: "uab-demo" }
+    paramsExample: { prompt: "Summarize this workspace", sessionKey: "default" }
   },
   {
     name: "agent.wait",
@@ -164,7 +164,7 @@ const DEFAULT_METHODS: RuntimeMethodDefinition[] = [
     description: "Start an OpenClaw agent request and forward Gateway events.",
     capability: "agent",
     risk: "write",
-    paramsExample: { prompt: "Summarize this workspace", sessionKey: "uab-demo" }
+    paramsExample: { prompt: "Summarize this workspace", sessionKey: "default" }
   },
   {
     name: "chat.history",
