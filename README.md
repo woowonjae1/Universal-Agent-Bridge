@@ -8,6 +8,24 @@ Universal Agent Bridge is designed around a small core and runtime adapters. Ope
 
 Agent runtimes expose different APIs for sessions, models, memory, artifacts, skills, scheduled tasks, and system controls. This project provides a stable bridge layer so clients can manage those runtimes through one protocol while each runtime keeps its own implementation behind an adapter.
 
+## Positioning: A Multi-Agent Control Plane, Not a Multi-Agent System
+
+Universal Agent Bridge is multi-agent **infrastructure** — the routing and orchestration layer that connects and coordinates multiple agent runtimes. It is deliberately *not* a multi-agent system (MAS) in itself: the agents live behind adapters; the bridge is the control plane that unifies and orchestrates them.
+
+What it provides toward multi-agent work:
+
+- Unified access to multiple heterogeneous agent runtimes (OpenClaw, Hermes, A2A, HTTP JSON-RPC, MCP) behind one protocol.
+- Capability-based routing — select an agent by what it can do — plus health-aware scheduling with circuit breaking, retries, and failover.
+- Fan-out (`broadcast`) to every agent advertising a capability.
+- Sequential multi-step handoff (`runPlan`) across runtimes.
+
+What it deliberately does not do (what a full MAS would add):
+
+- No autonomous planner/orchestrator agent that decides steps dynamically — `runPlan` executes client-authored plans.
+- No agent-initiated peer-to-peer messaging, task negotiation, shared blackboard, or emergent coordination.
+
+Analogy: as Kubernetes is not a microservice but the platform that runs many, this is not an agent but the control plane that connects and orchestrates many.
+
 ```text
 Client / Dashboard / CLI
         |
@@ -30,7 +48,7 @@ This repository starts with a working v0.1 foundation:
 - `@uab/mcp`: MCP server registry and tool invocation layer.
 - `@uab/a2a`: A2A remote agent registry and JSON-RPC client layer.
 - `@uab/adapter-sdk`: runtime adapter contract and shared capability types.
-- `@uab/core`: adapter registry, session-aware request router, scoped access policy, cancellation, timeouts, and concurrency limits.
+- `@uab/core`: adapter registry, session-aware request router, scoped access policy, cancellation, timeouts, and concurrency limits, plus health-aware scheduling (circuit breaking, retries, failover), capability routing, `broadcast` fan-out, `runPlan` multi-step handoff, a normalized memory/artifact resource model with CRUD, batched atomic persistence, and metrics/tracing with a dependency-free span-exporter hook.
 - `@uab/adapter-http-jsonrpc`: generic adapter for real agents that expose HTTP JSON-RPC.
 - `@uab/adapter-hermes`: Hermes Agent API Server adapter.
 - `@uab/adapter-openclaw`: OpenClaw Gateway adapter with CLI fallback.
