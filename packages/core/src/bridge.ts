@@ -934,9 +934,9 @@ export class AgentBridge {
 
   private latestRuntimeForRequest(requestId: BridgeRequest["id"], traceId: string): string | undefined {
     const id = requestId ?? null;
-    return this.audit.snapshot()
-      .find((entry) => entry.traceId === traceId && entry.requestId === id)
-      ?.runtime;
+    const matches = this.audit.snapshot()
+      .filter((entry) => entry.traceId === traceId && entry.requestId === id);
+    return (matches.find((entry) => entry.status === "success") ?? matches[0])?.runtime;
   }
 
   private persistState(): void {

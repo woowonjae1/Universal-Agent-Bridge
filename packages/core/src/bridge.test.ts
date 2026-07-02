@@ -701,3 +701,40 @@ test("plan execution supports runtime handoff between steps", async () => {
   assert.deepEqual(result.steps.map((step) => step.runtime), ["alpha", "alpha"]);
   assert.equal(result.steps[1].response.result?.method, "chat.followup");
 });
+
+test("plan handoff follows the successful failover runtime", async () => {
+  const calls: string[] = [];
+  const bridge = new AgentBridge();
+  bridge.register(chatAdapter("broken", (method) => {
+    calls.push(`broken:${method}`);
+    throw { code: -32004, message: "runtime down" };
+  }));
+  bridge.register(chatAdapter("healthy", (method) => {
+    calls.push(`healthy:${method}`);
+    return { runtime: "healthy", method };
+  }));
+
+  const result = await bridge.runPlan({
+    id: "handoff_failover_plan",
+    steps: [
+      {
+        id: "first",
+        capability: "chat",
+        method: "chat.send"
+      },
+      {
+        id: "second",
+        handoff: true,
+        method: "chat.followup"
+      }
+    ]
+  }) as {
+    status: string;
+    steps: Array<{ runtime?: string; response: { result?: { runtime?: string; method?: string } } }>;
+  };
+
+  assert.equal(result.status, "success");
+  assert.deepEqual(calls, ["broken:chat.send", "healthy:chat.send", "healthy:chat.followup"]);
+  assert.deepEqual(result.steps.map((step) => step.runtime), ["healthy", "healthy"]);
+  assert.equal(result.steps[1].response.result?.runtime, "healthy");
+});
