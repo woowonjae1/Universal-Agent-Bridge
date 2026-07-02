@@ -24,7 +24,7 @@ import type {
 import { AdapterRegistry } from "./adapter-registry.js";
 import { AuditLog, type AuditLogEntry } from "./audit-log.js";
 import { BridgeObservability, type BridgeSpanExporter, type BridgeTraceSnapshot } from "./observability.js";
-import { JsonBridgeStore, type StoredBridgeSession } from "./persistent-store.js";
+import { JsonBridgeStore, type StoredBridgePlanRun, type StoredBridgeSession } from "./persistent-store.js";
 import {
   BridgeResourceIndex,
   extractBridgeResources,
@@ -66,6 +66,7 @@ export interface BridgePlanStep {
   session?: BridgeRequest["session"];
   meta?: BridgeRequest["meta"];
   handoff?: boolean | { fromStep?: string };
+  dependsOn?: string | string[];
   parallelGroup?: string;
   when?: BridgePlanCondition;
 }
@@ -74,15 +75,51 @@ export interface BridgePlan {
   id?: string;
   traceId?: string;
   stopOnError?: boolean;
+  timeoutMs?: number;
+  mode?: "sequence" | "dag";
   steps: BridgePlanStep[];
 }
 
 export interface BridgePlanStepResult {
   stepId: string;
   runtime?: string;
-  status: "success" | "error" | "skipped";
+  status: "success" | "error" | "skipped" | "cancelled";
   response: BridgeResponse;
   traceId: string;
+  input?: JsonValue;
+}
+
+export type BridgePlanRunStatus = "pending" | "running" | "succeeded" | "failed" | "cancelled";
+export type BridgePlanRunStepStatus = "pending" | "running" | "success" | "error" | "skipped" | "cancelled";
+
+export interface BridgePlanRunStep {
+  stepId: string;
+  index: number;
+  status: BridgePlanRunStepStatus;
+  method: string;
+  dependsOn: string[];
+  traceId: string;
+  requestId: string;
+  runtime?: string;
+  startedAt?: string;
+  completedAt?: string;
+  input?: JsonValue;
+  response?: BridgeResponse;
+}
+
+export interface BridgePlanRunSnapshot {
+  id: string;
+  planId: string;
+  traceId: string;
+  status: BridgePlanRunStatus;
+  plan: BridgePlan;
+  createdAt: string;
+  updatedAt: string;
+  startedAt?: string;
+  completedAt?: string;
+  error?: JsonValue;
+  steps: BridgePlanRunStep[];
+  final: BridgeResponse | null;
 }
 
 export type BridgePlanCondition =
@@ -115,6 +152,8 @@ export class AgentBridge {
   private readonly retryBackoffMs: number;
   private readonly capabilityCache = new Map<string, RuntimeCapabilities>();
   private readonly roundRobin = new Map<string, number>();
+  private readonly planRuns = new Map<string, BridgePlanRunSnapshot>();
+  private readonly activePlanRuns = new Map<string, ActivePlanRun>();
 
   constructor(options: AgentBridgeOptions = {}) {
     this.store = options.persistencePath
@@ -123,6 +162,14 @@ export class AgentBridge {
     const snapshot = this.store?.load();
     for (const session of snapshot?.sessions ?? []) {
       this.sessionBindings.set(session.id, session);
+    }
+    for (const run of snapshot?.planRuns ?? []) {
+      const normalized = fromStoredPlanRun(run);
+      if (normalized) {
+        this.planRuns.set(normalized.id, isTerminalPlanRunStatus(normalized.status)
+          ? normalized
+          : resetPlanRunForResume(normalized));
+      }
     }
     this.accessPolicy = options.accessPolicy ?? new AllowAllAccessPolicy();
     this.logger = options.logger;
@@ -416,60 +463,307 @@ export class AgentBridge {
   }
 
   async runPlan(plan: BridgePlan, principal?: Principal): Promise<JsonValue> {
+    const run = this.createPlanRun(plan);
+    const completed = await this.drivePlanRun(run.id, principal);
+    return toJsonValue(toPlanRunResult(completed));
+  }
+
+  startPlanRun(plan: BridgePlan, principal?: Principal): JsonValue {
+    const run = this.createPlanRun(plan);
+    void this.drivePlanRun(run.id, principal);
+    return toJsonValue({ run });
+  }
+
+  async resumePlanRun(runId: string, principal?: Principal): Promise<JsonValue> {
+    const run = this.planRuns.get(runId);
+    if (!run) return toJsonValue({ run: null });
+    if (this.activePlanRuns.has(runId)) return toJsonValue({ run });
+
+    const reset = resetPlanRunForResume(run);
+    this.planRuns.set(runId, reset);
+    this.persistState();
+    const completed = await this.drivePlanRun(runId, principal);
+    return toJsonValue({ run: completed });
+  }
+
+  getPlanRun(runId: string): JsonValue {
+    return toJsonValue({ run: this.planRuns.get(runId) ?? null });
+  }
+
+  listPlanRuns(limit = 50): JsonValue {
+    const requestedLimit = Number.isFinite(limit) ? Math.trunc(limit) : 50;
+    const normalizedLimit = Math.max(1, Math.min(requestedLimit, 200));
+    const runs = [...this.planRuns.values()]
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+      .slice(0, normalizedLimit);
+    return toJsonValue({ runs, limit: normalizedLimit, total: this.planRuns.size });
+  }
+
+  cancelPlanRun(runId: string): boolean {
+    const active = this.activePlanRuns.get(runId);
+    if (active) {
+      active.controller.abort(new Error(`Plan run '${runId}' was cancelled.`));
+      return true;
+    }
+    const run = this.planRuns.get(runId);
+    if (!run || isTerminalPlanRunStatus(run.status)) return false;
+    this.markPlanRunCancelled(run, new Error(`Plan run '${runId}' was cancelled.`));
+    return true;
+  }
+
+  private createPlanRun(plan: BridgePlan): BridgePlanRunSnapshot {
     const planId = normalizeNonEmptyString(plan.id) ?? `plan_${Date.now().toString(36)}`;
-    const baseTraceId = normalizeNonEmptyString(plan.traceId) ?? `trace_${planId}`;
-    const state: BridgePlanExecutionState = {
+    const runId = this.uniquePlanRunId(planId);
+    const traceId = normalizeNonEmptyString(plan.traceId) ?? `trace_${runId}`;
+    const now = new Date().toISOString();
+    const steps = normalizePlanRunSteps(plan, runId, traceId);
+    const run: BridgePlanRunSnapshot = {
+      id: runId,
       planId,
-      baseTraceId,
+      traceId,
+      status: "pending",
+      plan,
+      createdAt: now,
+      updatedAt: now,
+      steps,
+      final: null
+    };
+    this.planRuns.set(run.id, run);
+    this.persistState();
+    return run;
+  }
+
+  private uniquePlanRunId(base: string): string {
+    if (!this.planRuns.has(base)) return base;
+    let candidate = `${base}_${Date.now().toString(36)}`;
+    while (this.planRuns.has(candidate)) {
+      candidate = `${base}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+    }
+    return candidate;
+  }
+
+  private drivePlanRun(runId: string, principal?: Principal): Promise<BridgePlanRunSnapshot> {
+    const active = this.activePlanRuns.get(runId);
+    if (active) return active.done;
+
+    const run = this.planRuns.get(runId);
+    if (!run) return Promise.reject(new Error(`Plan run '${runId}' was not found.`));
+
+    const controller = new AbortController();
+    const timeoutMs = normalizePositiveNumber(run.plan.timeoutMs);
+    let timeout: NodeJS.Timeout | undefined;
+    if (timeoutMs !== undefined) {
+      timeout = setTimeout(() => {
+        controller.abort(new Error(`Plan run '${runId}' timed out after ${timeoutMs}ms.`));
+      }, timeoutMs);
+      timeout.unref?.();
+    }
+
+    const done = this.executePlanRun(runId, controller.signal, principal)
+      .finally(() => {
+        if (timeout) clearTimeout(timeout);
+        this.activePlanRuns.delete(runId);
+      });
+    this.activePlanRuns.set(runId, { controller, done });
+    return done;
+  }
+
+  private async executePlanRun(
+    runId: string,
+    signal: AbortSignal,
+    principal?: Principal
+  ): Promise<BridgePlanRunSnapshot> {
+    const run = this.planRuns.get(runId);
+    if (!run) throw new Error(`Plan run '${runId}' was not found.`);
+
+    const now = new Date().toISOString();
+    run.status = "running";
+    run.startedAt = run.startedAt ?? now;
+    run.updatedAt = now;
+    this.persistState();
+
+    const state = this.createPlanExecutionState(run);
+
+    while (true) {
+      if (signal.aborted) {
+        this.markPlanRunCancelled(run, abortErrorFromSignal(signal));
+        return run;
+      }
+
+      const pending = run.steps.filter((step) => step.status === "pending");
+      if (pending.length === 0) break;
+
+      const ready = pending.filter((step) => step.dependsOn.every((dependency) => {
+        const upstream = run.steps.find((entry) => entry.stepId === dependency);
+        return upstream ? isTerminalPlanStepStatus(upstream.status) : false;
+      }));
+
+      if (ready.length === 0) {
+        this.markPlanRunFailed(run, createErrorResponse({
+          code: BRIDGE_ERROR_CODES.invalidRequest,
+          message: "Plan run cannot make progress. Check for missing or cyclic dependsOn references."
+        }));
+        return run;
+      }
+
+      for (const step of ready) {
+        step.status = "running";
+        step.startedAt = new Date().toISOString();
+      }
+      run.updatedAt = new Date().toISOString();
+      this.persistState();
+
+      const results = await Promise.all(
+        ready.map((stepRun) =>
+          this.executePlanStep(
+            run.plan.steps[stepRun.index],
+            stepRun,
+            defaultHandoffSource(stepRun, run.steps),
+            state,
+            signal,
+            principal
+          )
+        )
+      );
+
+      for (const result of results) {
+        const stepRun = run.steps.find((entry) => entry.stepId === result.stepId);
+        if (!stepRun) continue;
+        stepRun.status = result.status;
+        stepRun.runtime = result.runtime;
+        stepRun.completedAt = new Date().toISOString();
+        stepRun.input = result.input;
+        stepRun.response = result.response;
+        state.stepResults.set(result.stepId, result);
+        if (result.runtime) state.stepRuntimes.set(result.stepId, result.runtime);
+      }
+
+      run.final = results.at(-1)?.response ?? run.final;
+      run.updatedAt = new Date().toISOString();
+      this.persistState();
+
+      const failed = results.some((entry) => entry.status === "error" || entry.status === "cancelled");
+      if (failed && run.plan.stopOnError !== false) {
+        if (signal.aborted || results.some((entry) => entry.status === "cancelled")) {
+          this.markPlanRunCancelled(run, abortErrorFromSignal(signal));
+        } else {
+          run.status = "failed";
+          run.completedAt = new Date().toISOString();
+          run.updatedAt = run.completedAt;
+          this.cancelPendingPlanSteps(run, "Plan stopped after a step failed.");
+          this.persistState();
+        }
+        return run;
+      }
+    }
+
+    run.status = run.steps.some((step) => step.status === "error") ? "failed" : "succeeded";
+    run.completedAt = new Date().toISOString();
+    run.updatedAt = run.completedAt;
+    this.persistState();
+    return run;
+  }
+
+  private createPlanExecutionState(run: BridgePlanRunSnapshot): BridgePlanExecutionState {
+    const state: BridgePlanExecutionState = {
+      planId: run.id,
+      baseTraceId: run.traceId,
       stepRuntimes: new Map(),
       stepResults: new Map()
     };
-    const results: BridgePlanStepResult[] = [];
-    let previousStepId: string | undefined;
-    let status: "success" | "error" = "success";
 
-    for (let index = 0; index < plan.steps.length;) {
-      const batch = collectPlanBatch(plan.steps, index);
-      const batchResults = batch.parallel
-        ? await Promise.all(
-          batch.steps.map((step, offset) =>
-            this.executePlanStep(step, index + offset, previousStepId, state, principal)
-          )
-        )
-        : [await this.executePlanStep(batch.steps[0], index, previousStepId, state, principal)];
-
-      for (const result of batchResults) {
-        results.push(result);
-        state.stepResults.set(result.stepId, result);
-        if (result.runtime) state.stepRuntimes.set(result.stepId, result.runtime);
-        if (result.status !== "skipped") previousStepId = result.stepId;
-      }
-
-      if (batchResults.some((entry) => entry.status === "error")) {
-        status = "error";
-        if (plan.stopOnError !== false) break;
-      }
-      index += batch.steps.length;
+    for (const step of run.steps) {
+      if (!step.response || !isTerminalPlanStepStatus(step.status)) continue;
+      const result: BridgePlanStepResult = {
+        stepId: step.stepId,
+        runtime: step.runtime,
+        status: toPlanStepResultStatus(step.status),
+        response: step.response,
+        traceId: step.traceId,
+        input: step.input
+      };
+      state.stepResults.set(step.stepId, result);
+      if (step.runtime) state.stepRuntimes.set(step.stepId, step.runtime);
     }
 
-    return toJsonValue({
-      id: planId,
-      status,
-      steps: results,
-      final: results.at(-1)?.response ?? null
+    return state;
+  }
+
+  private markPlanRunFailed(run: BridgePlanRunSnapshot, response: BridgeResponse): void {
+    const now = new Date().toISOString();
+    const pending = run.steps.find((step) => step.status === "pending");
+    if (pending) {
+      pending.status = "error";
+      pending.completedAt = now;
+      pending.response = response;
+    }
+    run.final = response;
+    run.error = "error" in response ? toJsonValue(response.error) : undefined;
+    run.status = "failed";
+    run.completedAt = now;
+    run.updatedAt = now;
+    this.persistState();
+  }
+
+  private markPlanRunCancelled(run: BridgePlanRunSnapshot, error: Error): void {
+    const now = new Date().toISOString();
+    const response = createErrorResponse({
+      code: BRIDGE_ERROR_CODES.timeout,
+      message: error.message
     });
+    for (const step of run.steps) {
+      if (step.status === "pending" || step.status === "running") {
+        step.status = "cancelled";
+        step.completedAt = now;
+        step.response = step.response ?? response;
+      }
+    }
+    run.final = response;
+    run.error = "error" in response ? toJsonValue(response.error) : undefined;
+    run.status = "cancelled";
+    run.completedAt = now;
+    run.updatedAt = now;
+    this.persistState();
+  }
+
+  private cancelPendingPlanSteps(run: BridgePlanRunSnapshot, message: string): void {
+    const now = new Date().toISOString();
+    for (const step of run.steps) {
+      if (step.status !== "pending") continue;
+      step.status = "cancelled";
+      step.completedAt = now;
+      step.response = createErrorResponse({
+        id: step.requestId,
+        code: BRIDGE_ERROR_CODES.invalidRequest,
+        message
+      });
+    }
   }
 
   private async executePlanStep(
     step: BridgePlanStep,
-    index: number,
-    previousStepId: string | undefined,
+    stepRun: BridgePlanRunStep,
+    defaultHandoffStepId: string | undefined,
     state: BridgePlanExecutionState,
+    signal: AbortSignal,
     principal?: Principal
   ): Promise<BridgePlanStepResult> {
-    const stepId = normalizeNonEmptyString(step.id) ?? `step_${index + 1}`;
-    const traceId = `${state.baseTraceId}.${stepId}`;
-    const requestId = `${state.planId}_${stepId}`;
+    const stepId = stepRun.stepId;
+    const traceId = stepRun.traceId;
+    const requestId = stepRun.requestId;
+
+    if (signal.aborted) {
+      return {
+        stepId,
+        status: "cancelled",
+        response: createErrorResponse({
+          id: requestId,
+          code: BRIDGE_ERROR_CODES.timeout,
+          message: abortErrorFromSignal(signal).message
+        }),
+        traceId
+      };
+    }
 
     if (!evaluatePlanCondition(step.when, state)) {
       return {
@@ -485,24 +779,34 @@ export class AgentBridge {
     const handoffFrom = typeof step.handoff === "object"
       ? normalizeNonEmptyString(step.handoff.fromStep)
       : step.handoff === true
-        ? previousStepId
+        ? defaultHandoffStepId
         : undefined;
     const handoffRuntime = handoffFrom ? state.stepRuntimes.get(handoffFrom) : undefined;
-    const runtime = resolveTemplateString(step.runtime, state) ?? handoffRuntime;
-    const capability = runtime ? undefined : resolveTemplateString(step.capability, state);
-    const request: BridgeRequest = {
-      jsonrpc: "2.0",
-      id: requestId,
-      runtime,
-      capability,
-      session: resolvePlanSession(step.session, state),
-      method: resolveTemplateString(step.method, state) ?? step.method,
-      params: step.params === undefined ? undefined : resolvePlanTemplates(step.params, state),
-      meta: {
-        ...(step.meta ? resolvePlanTemplates(step.meta as JsonValue, state) as BridgeRequest["meta"] : {}),
-        traceId
-      }
-    };
+    let request: BridgeRequest;
+    try {
+      const runtime = resolveTemplateString(step.runtime, state) ?? handoffRuntime;
+      const capability = runtime ? undefined : resolveTemplateString(step.capability, state);
+      request = {
+        jsonrpc: "2.0",
+        id: requestId,
+        runtime,
+        capability,
+        session: resolvePlanSession(step.session, state),
+        method: resolveTemplateString(step.method, state) ?? step.method,
+        params: step.params === undefined ? undefined : resolvePlanTemplates(step.params, state),
+        meta: {
+          ...(step.meta ? resolvePlanTemplates(step.meta as JsonValue, state) as BridgeRequest["meta"] : {}),
+          traceId
+        }
+      };
+    } catch (error) {
+      const response = createErrorResponse({
+        id: requestId,
+        code: BRIDGE_ERROR_CODES.invalidRequest,
+        message: error instanceof Error ? error.message : "Plan step template resolution failed."
+      });
+      return { stepId, status: "error", response, traceId };
+    }
 
     if (step.handoff && !request.runtime) {
       const response = createErrorResponse({
@@ -513,14 +817,22 @@ export class AgentBridge {
       return { stepId, status: "error", response, traceId };
     }
 
-    const response = await this.call(request, principal);
+    const onAbort = () => this.cancel(String(request.id ?? traceId));
+    signal.addEventListener("abort", onAbort, { once: true });
+    let response: BridgeResponse;
+    try {
+      response = await this.call(request, principal);
+    } finally {
+      signal.removeEventListener("abort", onAbort);
+    }
     const successfulRuntime = this.latestRuntimeForRequest(request.id, traceId);
     return {
       stepId,
       runtime: successfulRuntime,
-      status: "error" in response ? "error" : "success",
+      status: signal.aborted ? "cancelled" : "error" in response ? "error" : "success",
       response,
-      traceId
+      traceId,
+      input: request.params
     };
   }
 
@@ -1006,6 +1318,7 @@ export class AgentBridge {
         sessions: [...this.sessionBindings.values()].map(toStoredSession),
         audit: this.audit.snapshot(),
         resources: this.resources.snapshot(),
+        planRuns: this.planRunsSnapshot(),
         updatedAt: new Date().toISOString()
       });
     } catch (error) {
@@ -1013,6 +1326,12 @@ export class AgentBridge {
         error
       });
     }
+  }
+
+  private planRunsSnapshot(): StoredBridgePlanRun[] {
+    return [...this.planRuns.values()]
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+      .map(toStoredPlanRun);
   }
 
   private async runLimited<T>(
@@ -1082,6 +1401,181 @@ interface ActiveBridgeCall {
   controller: AbortController;
   signal: AbortSignal;
   dispose(): void;
+}
+
+interface ActivePlanRun {
+  controller: AbortController;
+  done: Promise<BridgePlanRunSnapshot>;
+}
+
+function normalizePlanRunSteps(plan: BridgePlan, runId: string, traceId: string): BridgePlanRunStep[] {
+  const stepIds = plan.steps.map((step, index) => normalizeNonEmptyString(step.id) ?? `step_${index + 1}`);
+  const dagMode = plan.mode === "dag" || plan.steps.some((step) => step.dependsOn !== undefined);
+  const dependencies = dagMode
+    ? normalizeDagDependencies(plan.steps)
+    : normalizeSequenceDependencies(plan.steps, stepIds);
+
+  return plan.steps.map((step, index) => ({
+    stepId: stepIds[index],
+    index,
+    status: "pending",
+    method: step.method,
+    dependsOn: dependencies[index],
+    traceId: `${traceId}.${stepIds[index]}`,
+    requestId: `${runId}_${stepIds[index]}`
+  }));
+}
+
+function normalizeDagDependencies(steps: BridgePlanStep[]): string[][] {
+  return steps.map((step) => normalizeDependsOn(step.dependsOn));
+}
+
+function normalizeSequenceDependencies(steps: BridgePlanStep[], stepIds: string[]): string[][] {
+  const dependencies = steps.map(() => [] as string[]);
+  let index = 0;
+  let barrier: string[] = [];
+
+  while (index < steps.length) {
+    const group = normalizeNonEmptyString(steps[index].parallelGroup);
+    if (!group) {
+      dependencies[index] = [...barrier];
+      barrier = [stepIds[index]];
+      index += 1;
+      continue;
+    }
+
+    const groupStart = index;
+    while (index < steps.length && normalizeNonEmptyString(steps[index].parallelGroup) === group) {
+      dependencies[index] = [...barrier];
+      index += 1;
+    }
+    barrier = stepIds.slice(groupStart, index);
+  }
+
+  return dependencies;
+}
+
+function normalizeDependsOn(value: BridgePlanStep["dependsOn"]): string[] {
+  if (Array.isArray(value)) return value.map(normalizeNonEmptyString).filter((entry): entry is string => Boolean(entry));
+  const single = normalizeNonEmptyString(value);
+  return single ? [single] : [];
+}
+
+function defaultHandoffSource(step: BridgePlanRunStep, steps: BridgePlanRunStep[]): string | undefined {
+  if (step.dependsOn.length > 0) return step.dependsOn.at(-1);
+  const previous = steps
+    .filter((entry) => entry.index < step.index && isTerminalPlanStepStatus(entry.status))
+    .sort((a, b) => b.index - a.index)[0];
+  return previous?.stepId;
+}
+
+function isTerminalPlanRunStatus(status: BridgePlanRunStatus): boolean {
+  return status === "succeeded" || status === "failed" || status === "cancelled";
+}
+
+function isTerminalPlanStepStatus(status: BridgePlanRunStepStatus): boolean {
+  return status === "success" || status === "error" || status === "skipped" || status === "cancelled";
+}
+
+function toPlanStepResultStatus(status: BridgePlanRunStepStatus): BridgePlanStepResult["status"] {
+  if (status === "success" || status === "error" || status === "skipped" || status === "cancelled") return status;
+  return "cancelled";
+}
+
+function toPlanRunResult(run: BridgePlanRunSnapshot): unknown {
+  return {
+    id: run.id,
+    runId: run.id,
+    status: run.status === "succeeded"
+      ? "success"
+      : run.status === "cancelled"
+        ? "cancelled"
+        : "error",
+    runStatus: run.status,
+    steps: run.steps.map((step) => ({
+      stepId: step.stepId,
+      runtime: step.runtime,
+      status: toPlanStepResultStatus(step.status),
+      response: step.response ?? createErrorResponse({
+        id: step.requestId,
+        code: BRIDGE_ERROR_CODES.invalidRequest,
+        message: `Plan step '${step.stepId}' did not complete.`
+      }),
+      traceId: step.traceId,
+      input: step.input
+    })),
+    final: run.final
+  };
+}
+
+function resetPlanRunForResume(run: BridgePlanRunSnapshot): BridgePlanRunSnapshot {
+  const now = new Date().toISOString();
+  const steps = run.steps.map((step) => {
+    if (step.status === "success" || step.status === "skipped") return step;
+    return {
+      ...step,
+      status: "pending" as BridgePlanRunStepStatus,
+      runtime: undefined,
+      startedAt: undefined,
+      completedAt: undefined,
+      input: undefined,
+      response: undefined
+    };
+  });
+  return {
+    ...run,
+    status: "pending",
+    updatedAt: now,
+    completedAt: undefined,
+    error: undefined,
+    steps,
+    final: steps.find((step) => step.response)?.response ?? null
+  };
+}
+
+function toStoredPlanRun(run: BridgePlanRunSnapshot): StoredBridgePlanRun {
+  return {
+    id: run.id,
+    planId: run.planId,
+    traceId: run.traceId,
+    status: run.status,
+    plan: toJsonValue(run.plan),
+    createdAt: run.createdAt,
+    updatedAt: run.updatedAt,
+    startedAt: run.startedAt,
+    completedAt: run.completedAt,
+    error: run.error,
+    steps: run.steps.map((step) => toJsonValue(step)),
+    final: run.final ? toJsonValue(run.final) : null
+  };
+}
+
+function fromStoredPlanRun(run: StoredBridgePlanRun): BridgePlanRunSnapshot | undefined {
+  if (!isJsonRecord(run.plan) || !Array.isArray(run.plan.steps)) return undefined;
+  const steps = run.steps.filter(isJsonRecord).map((step) => step as unknown as BridgePlanRunStep);
+  if (steps.length === 0) return undefined;
+  return {
+    id: run.id,
+    planId: run.planId,
+    traceId: run.traceId,
+    status: isPlanRunStatus(run.status) ? run.status : "failed",
+    plan: run.plan as unknown as BridgePlan,
+    createdAt: run.createdAt,
+    updatedAt: run.updatedAt,
+    startedAt: run.startedAt,
+    completedAt: run.completedAt,
+    error: run.error,
+    steps,
+    final: isBridgeResponseJson(run.final) ? run.final as unknown as BridgeResponse : null
+  };
+}
+
+function isPlanRunStatus(value: string): value is BridgePlanRunStatus {
+  return value === "pending" || value === "running" || value === "succeeded" || value === "failed" || value === "cancelled";
+}
+
+function isBridgeResponseJson(value: JsonValue): boolean {
+  return isJsonRecord(value) && value.jsonrpc === "2.0" && ("result" in value || "error" in value);
 }
 
 function collectPlanBatch(steps: BridgePlanStep[], index: number): { steps: BridgePlanStep[]; parallel: boolean } {
@@ -1155,11 +1649,16 @@ function resolvePlanTemplates(value: JsonValue, state: BridgePlanExecutionState)
 
 function resolveTemplateText(value: string, state: BridgePlanExecutionState): JsonValue {
   const exact = value.match(/^\$\{\s*([^}]+)\s*\}$/);
-  if (exact) return toJsonValue(resolvePlanRef(exact[1], state));
+  if (exact) {
+    const resolved = resolvePlanRef(exact[1], state);
+    if (resolved === undefined) throw new MissingPlanReferenceError(exact[1]);
+    return toJsonValue(resolved);
+  }
 
   return value.replace(/\$\{\s*([^}]+)\s*\}/g, (_match, ref: string) => {
     const resolved = resolvePlanRef(ref, state);
-    if (resolved === undefined || resolved === null) return "";
+    if (resolved === undefined) throw new MissingPlanReferenceError(ref);
+    if (resolved === null) return "";
     if (typeof resolved === "string") return resolved;
     if (typeof resolved === "number" || typeof resolved === "boolean") return String(resolved);
     return JSON.stringify(resolved);
@@ -1264,6 +1763,13 @@ function jsonEquals(left: JsonValue, right: JsonValue): boolean {
 
 function isJsonRecord(value: unknown): value is JsonObject {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+class MissingPlanReferenceError extends Error {
+  constructor(ref: string) {
+    super(`Plan template reference '${unwrapTemplateRef(ref)}' was not found.`);
+    this.name = "MissingPlanReferenceError";
+  }
 }
 
 class ConcurrencyLimiter {

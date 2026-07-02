@@ -1,7 +1,7 @@
 import { mkdir, rename, writeFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { isJsonObject, type JsonObject } from "@uab/protocol";
+import { isJsonObject, isJsonValue, type JsonObject, type JsonValue } from "@uab/protocol";
 import type { AuditLogEntry } from "./audit-log.js";
 import type { BridgeResource } from "./resources.js";
 
@@ -18,7 +18,23 @@ export interface BridgePersistentSnapshot {
   sessions: StoredBridgeSession[];
   audit: AuditLogEntry[];
   resources: BridgeResource[];
+  planRuns: StoredBridgePlanRun[];
   updatedAt: string;
+}
+
+export interface StoredBridgePlanRun {
+  id: string;
+  planId: string;
+  traceId: string;
+  status: string;
+  plan: JsonValue;
+  createdAt: string;
+  updatedAt: string;
+  startedAt?: string;
+  completedAt?: string;
+  error?: JsonValue;
+  steps: JsonValue[];
+  final: JsonValue;
 }
 
 export class JsonBridgeStore {
@@ -37,6 +53,7 @@ export class JsonBridgeStore {
         sessions: Array.isArray(parsed.sessions) ? parsed.sessions.filter(isStoredSession).map(normalizeSession) : [],
         audit: Array.isArray(parsed.audit) ? parsed.audit.filter(isAuditEntry) : [],
         resources: Array.isArray(parsed.resources) ? parsed.resources.filter(isBridgeResource) : [],
+        planRuns: Array.isArray(parsed.planRuns) ? parsed.planRuns.filter(isStoredPlanRun) : [],
         updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : new Date(0).toISOString()
       };
     } catch {
@@ -120,6 +137,21 @@ function isBridgeResource(value: unknown): value is BridgeResource {
     && typeof value.traceId === "string"
     && typeof value.createdAt === "string"
     && typeof value.updatedAt === "string";
+}
+
+function isStoredPlanRun(value: unknown): value is StoredBridgePlanRun {
+  return isRecord(value)
+    && typeof value.id === "string"
+    && typeof value.planId === "string"
+    && typeof value.traceId === "string"
+    && typeof value.status === "string"
+    && isJsonValue(value.plan)
+    && typeof value.createdAt === "string"
+    && typeof value.updatedAt === "string"
+    && Array.isArray(value.steps)
+    && value.steps.every(isJsonValue)
+    && isJsonValue(value.final)
+    && (value.error === undefined || isJsonValue(value.error));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

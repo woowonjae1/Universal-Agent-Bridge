@@ -896,3 +896,188 @@ test("plan execution runs adjacent parallel groups concurrently and joins their 
     right: "fetch.b"
   });
 });
+
+test("plan runs are persisted and queryable by run id", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "uab-plan-state-"));
+  const statePath = join(dir, "state.json");
+  const bridge = new AgentBridge({ persistencePath: statePath });
+  bridge.register(chatAdapter("alpha", (method) => ({ method })));
+
+  const result = await bridge.runPlan({
+    id: "persisted_plan",
+    steps: [
+      {
+        id: "first",
+        runtime: "alpha",
+        method: "chat.send"
+      }
+    ]
+  }) as { runId: string; status: string };
+  await bridge.flushPersistence();
+
+  const second = new AgentBridge({ persistencePath: statePath });
+  const fetched = second.getPlanRun(result.runId) as {
+    run: { id: string; status: string; steps: Array<{ status: string }> } | null;
+  };
+
+  assert.equal(result.status, "success");
+  assert.equal(fetched.run?.id, "persisted_plan");
+  assert.equal(fetched.run?.status, "succeeded");
+  assert.deepEqual(fetched.run?.steps.map((step) => step.status), ["success"]);
+});
+
+test("persisted in-flight plan runs reload as resumable pending runs", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "uab-plan-inflight-"));
+  const statePath = join(dir, "state.json");
+  const bridge = new AgentBridge({ persistencePath: statePath });
+  bridge.register({
+    info: { id: "slow", name: "Slow Runtime" },
+    capabilities() {
+      return { pipeline: { write: true } };
+    },
+    async call(_request, context) {
+      await new Promise<void>((resolve, reject) => {
+        context.signal?.addEventListener("abort", () => {
+          reject(Object.assign(new Error("cancelled"), { code: -32005 }));
+        }, { once: true });
+        setTimeout(resolve, 500);
+      });
+      return { ok: true };
+    }
+  });
+
+  bridge.startPlanRun({
+    id: "restart_plan",
+    steps: [
+      { id: "slow", runtime: "slow", method: "work" }
+    ]
+  });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  await bridge.flushPersistence();
+
+  const reloaded = new AgentBridge({ persistencePath: statePath });
+  const snapshot = reloaded.getPlanRun("restart_plan") as {
+    run: { status: string; steps: Array<{ status: string }> } | null;
+  };
+
+  assert.equal(snapshot.run?.status, "pending");
+  assert.deepEqual(snapshot.run?.steps.map((step) => step.status), ["pending"]);
+  assert.equal(bridge.cancelPlanRun("restart_plan"), true);
+});
+
+test("DAG plan mode runs independent steps concurrently and waits for dependencies", async () => {
+  let active = 0;
+  let maxActive = 0;
+  const bridge = new AgentBridge();
+  bridge.register({
+    info: { id: "dag", name: "DAG Runtime" },
+    capabilities() {
+      return { pipeline: { write: true } };
+    },
+    async call(request) {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      try {
+        if (request.method !== "merge") {
+          await new Promise((resolve) => setTimeout(resolve, 25));
+          return { value: request.method };
+        }
+        return { merged: request.params };
+      } finally {
+        active -= 1;
+      }
+    }
+  });
+
+  const result = await bridge.runPlan({
+    id: "dag_plan",
+    mode: "dag",
+    steps: [
+      { id: "left", runtime: "dag", method: "left" },
+      { id: "right", runtime: "dag", method: "right" },
+      {
+        id: "merge",
+        dependsOn: ["left", "right"],
+        runtime: "dag",
+        method: "merge",
+        params: {
+          left: "${steps.left.result.value}",
+          right: "${steps.right.result.value}"
+        }
+      }
+    ]
+  }) as {
+    status: string;
+    steps: Array<{ response: { result?: { merged?: unknown } } }>;
+  };
+
+  assert.equal(result.status, "success");
+  assert.equal(maxActive, 2);
+  assert.deepEqual(result.steps[2].response.result?.merged, {
+    left: "left",
+    right: "right"
+  });
+});
+
+test("plan-level cancellation aborts running steps and marks the run cancelled", async () => {
+  const bridge = new AgentBridge();
+  bridge.register({
+    info: { id: "slow", name: "Slow Runtime" },
+    capabilities() {
+      return { pipeline: { write: true } };
+    },
+    async call(_request, context) {
+      await new Promise<void>((resolve, reject) => {
+        context.signal?.addEventListener("abort", () => {
+          reject(Object.assign(new Error("plan cancelled"), { code: -32005 }));
+        }, { once: true });
+        setTimeout(resolve, 500);
+      });
+      return { ok: true };
+    }
+  });
+
+  bridge.startPlanRun({
+    id: "cancel_plan",
+    steps: [
+      { id: "slow", runtime: "slow", method: "work" }
+    ]
+  });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  assert.equal(bridge.cancelPlanRun("cancel_plan"), true);
+  await new Promise((resolve) => setTimeout(resolve, 40));
+
+  const snapshot = bridge.getPlanRun("cancel_plan") as {
+    run: { status: string; steps: Array<{ status: string; response?: { error?: { message: string } } }> } | null;
+  };
+  assert.equal(snapshot.run?.status, "cancelled");
+  assert.equal(snapshot.run?.steps[0].status, "cancelled");
+});
+
+test("plan template references fail fast when a prior output is missing", async () => {
+  const bridge = new AgentBridge();
+  bridge.register(chatAdapter("alpha", () => ({ ok: true })));
+
+  const result = await bridge.runPlan({
+    id: "missing_ref_plan",
+    steps: [
+      {
+        id: "first",
+        runtime: "alpha",
+        method: "chat.send",
+        params: {
+          value: "${steps.unknown.result.value}"
+        }
+      }
+    ]
+  }) as {
+    status: string;
+    steps: Array<{ status: string; response: { error?: { code: number; message: string } } }>;
+  };
+
+  assert.equal(result.status, "error");
+  assert.equal(result.steps[0].status, "error");
+  assert.equal(result.steps[0].response.error?.code, -32600);
+  assert.match(result.steps[0].response.error?.message ?? "", /steps\.unknown\.result\.value/);
+});

@@ -452,6 +452,83 @@ test("HTTP transport exposes health broadcast resource CRUD and plan endpoints",
   }
 });
 
+test("HTTP transport manages asynchronous plan runs", async () => {
+  let calls = 0;
+  let aborts = 0;
+  const bridge = new AgentBridge({
+    adapters: [{
+      ...adapter,
+      capabilities() {
+        return { chat: { write: true, methods: ["chat.send"] } };
+      },
+      async call(_request, context) {
+        calls += 1;
+        if (calls === 1) {
+          await new Promise<void>((resolve, reject) => {
+            const timer = setTimeout(resolve, 1000);
+            context.signal?.addEventListener("abort", () => {
+              aborts += 1;
+              clearTimeout(timer);
+              reject(Object.assign(new Error("plan cancelled"), { code: -32005 }));
+            }, { once: true });
+          });
+        }
+        return { ok: true, calls };
+      }
+    }]
+  });
+  const server = createHttpBridgeServer({ bridge });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+
+  try {
+    const port = readPort(server);
+    const startResponse = await fetch(`http://127.0.0.1:${port}/plans`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        id: "http_async_plan",
+        timeoutMs: 5000,
+        mode: "dag",
+        steps: [
+          { id: "slow", runtime: "test", method: "chat.send", params: { text: "wait" } },
+          { id: "after", dependsOn: "slow", runtime: "test", method: "chat.send" }
+        ]
+      })
+    });
+    const started = await startResponse.json() as { run: { id: string; status: string } };
+
+    const listResponse = await fetch(`http://127.0.0.1:${port}/plans?limit=5`);
+    const listed = await listResponse.json() as { runs: Array<{ id: string }> };
+
+    const cancelResponse = await fetch(`http://127.0.0.1:${port}/plans/${encodeURIComponent(started.run.id)}/cancel`, {
+      method: "POST"
+    });
+    const cancelled = await cancelResponse.json() as { cancelled: boolean; runId: string };
+    const cancelledRun = await waitForPlanStatus(port, started.run.id, "cancelled");
+
+    const resumeResponse = await fetch(`http://127.0.0.1:${port}/plans/${encodeURIComponent(started.run.id)}/resume`, {
+      method: "POST"
+    });
+    const resumed = await resumeResponse.json() as { run: { status: string; steps: Array<{ status: string }> } };
+
+    assert.equal(startResponse.status, 202);
+    assert.equal(started.run.id, "http_async_plan");
+    assert.ok(listed.runs.some((run) => run.id === started.run.id));
+    assert.equal(cancelResponse.status, 200);
+    assert.equal(cancelled.cancelled, true);
+    assert.equal(cancelled.runId, started.run.id);
+    assert.equal(cancelledRun.run.status, "cancelled");
+    assert.equal(cancelledRun.run.steps[0]?.status, "cancelled");
+    assert.equal(aborts, 1);
+    assert.equal(resumeResponse.status, 200);
+    assert.equal(resumed.run.status, "succeeded");
+    assert.deepEqual(resumed.run.steps.map((step) => step.status), ["success", "success"]);
+  } finally {
+    await close(server);
+  }
+});
+
 test("HTTP transport cancels active RPC requests", async () => {
   const bridge = new AgentBridge({
     adapters: [{
@@ -514,4 +591,18 @@ function close(server: ReturnType<typeof createHttpBridgeServer>): Promise<void>
   return new Promise((resolve, reject) => {
     server.close((error) => error ? reject(error) : resolve());
   });
+}
+
+async function waitForPlanStatus(
+  port: number,
+  runId: string,
+  status: string
+): Promise<{ run: { status: string; steps: Array<{ status: string }> } }> {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const response = await fetch(`http://127.0.0.1:${port}/plans/${encodeURIComponent(runId)}`);
+    const payload = await response.json() as { run: { status: string; steps: Array<{ status: string }> } };
+    if (payload.run.status === status) return payload;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`Plan run '${runId}' did not reach status '${status}'.`);
 }

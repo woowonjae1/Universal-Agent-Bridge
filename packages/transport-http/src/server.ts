@@ -150,10 +150,43 @@ export function createHttpBridgeServer(options: HttpBridgeServerOptions): Server
         return;
       }
 
+      if (request.method === "GET" && url.pathname === "/plans") {
+        sendJson(response, 200, options.bridge.listPlanRuns(readNumber(url.searchParams.get("limit"))));
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/plans") {
+        const payload = await readJsonBody(request, maxBodyBytes);
+        sendJson(response, 202, options.bridge.startPlanRun(readPlan(payload)));
+        return;
+      }
+
       if (request.method === "POST" && url.pathname === "/plans/run") {
         const payload = await readJsonBody(request, maxBodyBytes);
         sendJson(response, 200, await options.bridge.runPlan(readPlan(payload)));
         return;
+      }
+
+      if (url.pathname.startsWith("/plans/")) {
+        const path = url.pathname.slice("/plans/".length);
+        const [encodedRunId, action] = path.split("/");
+        const runId = decodeURIComponent(encodedRunId ?? "");
+        if (request.method === "GET" && runId && !action) {
+          const payload = options.bridge.getPlanRun(runId);
+          sendJson(response, hasPlanRun(payload) ? 200 : 404, payload);
+          return;
+        }
+        if (request.method === "POST" && runId && action === "cancel") {
+          sendJson(response, 200, {
+            cancelled: options.bridge.cancelPlanRun(runId),
+            runId
+          });
+          return;
+        }
+        if (request.method === "POST" && runId && action === "resume") {
+          sendJson(response, 200, await options.bridge.resumePlanRun(runId));
+          return;
+        }
       }
 
       if (request.method === "GET" && url.pathname === "/agui/health") {
@@ -417,6 +450,10 @@ function readResourcePatch(payload: unknown): BridgeResourcePatch {
 
 function hasResource(payload: unknown): boolean {
   return isRecord(payload) && payload.resource !== null && payload.resource !== undefined;
+}
+
+function hasPlanRun(payload: unknown): boolean {
+  return isRecord(payload) && payload.run !== null && payload.run !== undefined;
 }
 
 function readResourceKind(value: string | null): "memory" | "artifact" | undefined {
