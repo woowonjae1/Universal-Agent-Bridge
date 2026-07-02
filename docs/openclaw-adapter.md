@@ -64,7 +64,7 @@ curl.exe -N -X POST http://127.0.0.1:8787/agui/runs `
   -d "{\"threadId\":\"thread_openclaw\",\"runId\":\"run_openclaw_stream\",\"state\":{},\"messages\":[],\"tools\":[],\"context\":[],\"forwardedProps\":{\"uab\":{\"runtime\":\"openclaw\",\"method\":\"chat.stream\",\"params\":{\"sessionKey\":\"project-main\",\"message\":\"What changed?\"}}}}"
 ```
 
-For compatibility, the adapter also accepts `text`, `prompt`, `input`, or `content` on `agent`, `agent.stream`, `chat.send`, and `chat.stream`, then converts them to OpenClaw's current `message` field. If `sessionKey` is omitted, it uses the bridge session id when present, otherwise `default`.
+For compatibility, the adapter also accepts `text`, `prompt`, `input`, or `content` on `agent`, `agent.stream`, `chat.send`, and `chat.stream`, then converts them to OpenClaw's current `message` field. If `sessionKey` is omitted, it uses the bridge session id when present, otherwise `default`; if `idempotencyKey` is omitted, it uses the bridge request id.
 
 Set scopes explicitly when needed:
 

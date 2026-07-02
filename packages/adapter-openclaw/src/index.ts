@@ -523,12 +523,7 @@ function normalizeOpenClawChatSendParams(
   const object = isJsonObject(params) ? params as JsonObject : {};
   const message = readOpenClawMessageText(params, object);
   const sessionKey = readOpenClawSessionKey(object, request, context);
-  const idempotencyKey = normalizeNonEmptyString(object.idempotencyKey)
-    ?? normalizeNonEmptyString(object.idempotency_key)
-    ?? normalizeNonEmptyString(object.runId)
-    ?? normalizeNonEmptyString(object.run_id)
-    ?? readIdLike(request?.raw.id)
-    ?? readIdLike(context?.requestId);
+  const idempotencyKey = readOpenClawIdempotencyKey(object, request, context);
 
   const output: JsonObject = {};
   copyKnownJsonField(object, output, "agentId");
@@ -550,13 +545,14 @@ function normalizeOpenClawAgentParams(
 ): JsonObject {
   const object = isJsonObject(params) ? params as JsonObject : {};
   const message = readOpenClawMessageText(params, object);
-  const output: JsonObject = { ...object };
-  delete output.prompt;
-  delete output.text;
-  delete output.input;
-  delete output.content;
+  const idempotencyKey = readOpenClawIdempotencyKey(object, request, context);
+  const output: JsonObject = {};
+  copyKnownJsonField(object, output, "agentId");
+  copyKnownJsonField(object, output, "sessionId");
+  copyKnownJsonField(object, output, "attachments");
   output.sessionKey = readOpenClawSessionKey(object, request, context);
   if (message !== undefined) output.message = message;
+  if (idempotencyKey) output.idempotencyKey = idempotencyKey;
   return output;
 }
 
@@ -580,6 +576,19 @@ function readOpenClawSessionKey(
     ?? normalizeNonEmptyString(request?.raw.session?.id)
     ?? normalizeNonEmptyString(context?.session?.id)
     ?? "default";
+}
+
+function readOpenClawIdempotencyKey(
+  params: JsonObject,
+  request?: AdapterCallRequest,
+  context?: AdapterCallContext
+): string | undefined {
+  return normalizeNonEmptyString(params.idempotencyKey)
+    ?? normalizeNonEmptyString(params.idempotency_key)
+    ?? normalizeNonEmptyString(params.runId)
+    ?? normalizeNonEmptyString(params.run_id)
+    ?? readIdLike(request?.raw.id)
+    ?? readIdLike(context?.requestId);
 }
 
 function copyKnownJsonField(input: JsonObject, output: JsonObject, key: string): void {

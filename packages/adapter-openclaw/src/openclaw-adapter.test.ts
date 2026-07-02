@@ -173,7 +173,8 @@ test("OpenClaw adapter normalizes agent prompt params for Gateway schema", async
     assert.deepEqual(result, { runId: "agent_req", status: "started" });
     assert.deepEqual(agentParams, {
       sessionKey: "default",
-      message: "List three capabilities."
+      message: "List three capabilities.",
+      idempotencyKey: "agent_req"
     });
   } finally {
     wss.close();
