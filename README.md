@@ -1,59 +1,51 @@
 # Universal Agent Bridge
 
-Transport-agnostic control plane for managing multiple AI agent runtimes through a unified RPC protocol.
+Transport-agnostic control plane for managing multiple AI agent runtimes through one unified RPC protocol.
 
-Universal Agent Bridge is designed around a small core and runtime adapters. OpenClaw, Hermes, and future agent systems plug into the same routing, transport, permission, and observability model instead of each transport speaking to each runtime directly.
+Different agent runtimes (OpenClaw, Hermes, A2A agents, MCP tool servers, any HTTP JSON-RPC agent) expose different APIs for sessions, models, memory, artifacts, and system controls. Universal Agent Bridge puts a small, stable core in front of them: clients speak one protocol, and each runtime keeps its own implementation behind an adapter. Instead of every client wiring to every runtime (N×M), everyone meets at the bridge (N+M).
 
-## Why This Exists
+## Positioning
 
-Agent runtimes expose different APIs for sessions, models, memory, artifacts, skills, scheduled tasks, and system controls. This project provides a stable bridge layer so clients can manage those runtimes through one protocol while each runtime keeps its own implementation behind an adapter.
-
-## Positioning: A Multi-Agent Control Plane, Not a Multi-Agent System
-
-Universal Agent Bridge is multi-agent **infrastructure** — the routing and orchestration layer that connects and coordinates multiple agent runtimes. It is deliberately *not* a multi-agent system (MAS) in itself: the agents live behind adapters; the bridge is the control plane that unifies and orchestrates them.
-
-What it provides toward multi-agent work:
-
-- Unified access to multiple heterogeneous agent runtimes (OpenClaw, Hermes, A2A, HTTP JSON-RPC, MCP) behind one protocol.
-- Capability-based routing — select an agent by what it can do — plus health-aware scheduling with circuit breaking, retries, and failover.
-- Fan-out (`broadcast`) to every agent advertising a capability.
-- Plan orchestration (`runPlan`) across runtimes with dataflow templates, conditional skips, adjacent parallel groups, and handoff.
-
-What it deliberately does not do (what a full MAS would add):
-
-- No autonomous planner/orchestrator agent that decides steps dynamically — `runPlan` executes client-authored plans.
-- No agent-initiated peer-to-peer messaging, task negotiation, shared blackboard, or emergent coordination.
-
-Analogy: as Kubernetes is not a microservice but the platform that runs many, this is not an agent but the control plane that connects and orchestrates many.
+This is multi-agent **infrastructure** — the routing and orchestration layer that connects and coordinates agent runtimes. It is deliberately *not* a multi-agent system (MAS) in itself: the agents live behind adapters; the bridge unifies and governs them. As Kubernetes is not a microservice but the platform that runs many, this is not an agent but the control plane that orchestrates many.
 
 ```text
-Client / Dashboard / CLI
-        |
-HTTP / WebSocket / MQTT / stdio
-        |
-Universal Agent Bridge Core
-        |
-Adapter Registry
-        |
-OpenClaw Adapter | Hermes Adapter | HTTP JSON-RPC Adapter | Custom Adapter
+        Client / Dashboard / CLI
+                   │
+        HTTP  (WebSocket / MQTT planned)
+                   │
+        ┌──────────────────────┐
+        │  Universal Agent      │   sessions · routing · health · limits
+        │  Bridge Core          │   audit · resources · persistence · metrics
+        └──────────┬───────────┘
+                   │  Adapter Registry
+   ┌───────────┬───┴────┬───────────┬───────────┐
+ OpenClaw    Hermes   A2A agents    MCP      HTTP JSON-RPC
 ```
 
-## Current Status
+## How It Works
 
-The core control plane is implemented and covered by an automated test suite:
+- **Runtimes & adapters.** Every backend is an adapter implementing one contract (`capabilities`, `call`, optional `stream`, `health`, lifecycle). Registering an adapter is all it takes to expose a runtime — the core never changes.
+- **Protocol.** One JSON-RPC-style envelope (`runtime`/`capability`, `method`, `params`, `session`, `meta`) with a shared response and error-code shape. Requests arrive over a transport (HTTP today) and are validated before routing.
+- **Routing & sessions.** A request targets a runtime by id, by `capability`, or by a sticky `session`: the first call binds a session to a runtime, later calls reuse it without re-specifying the runtime.
+- **Orchestration.** On top of single calls the bridge can select a runtime by capability, fan out to all runtimes with a capability (`broadcast`), and run multi-step plans (`runPlan`) with handoff, adjacent parallel groups, conditional skips, and dataflow between steps.
+- **Governance (applies to every call and every orchestration step).** Per-runtime circuit breaking with retries and failover, global and per-runtime concurrency limits, cancellation and timeouts, an audit log, a normalized memory/artifact resource index, batched atomic persistence, and metrics/tracing with a dependency-free span-exporter hook.
 
-- `@uab/protocol`: JSON-RPC style bridge envelope, responses, and error codes.
-- `@uab/a2ui`: A2UI dynamic UI envelope validation and sanitization.
-- `@uab/ag-ui`: AG-UI event mapping for frontend and app clients.
-- `@uab/mcp`: MCP server registry and tool invocation layer.
-- `@uab/a2a`: A2A remote agent registry and JSON-RPC client layer.
-- `@uab/adapter-sdk`: runtime adapter contract and shared capability types.
-- `@uab/core`: adapter registry, session-aware request router, scoped access policy, cancellation, timeouts, and concurrency limits, plus health-aware scheduling (circuit breaking, retries, failover), capability routing, `broadcast` fan-out, `runPlan` orchestration, a normalized memory/artifact resource model with CRUD, batched atomic persistence, and metrics/tracing with a dependency-free span-exporter hook.
-- `@uab/adapter-http-jsonrpc`: generic adapter for real agents that expose HTTP JSON-RPC.
-- `@uab/adapter-hermes`: Hermes Agent API Server adapter.
-- `@uab/adapter-openclaw`: OpenClaw Gateway adapter with CLI fallback.
-- `@uab/transport-http`: Node.js HTTP transport with `/rpc`, `/agui/runs`, `/cancel`, `/sessions`, `/health`, `/runtimes`, `/health/runtimes`, `/metrics`, `/traces/{traceId}`, resource CRUD (`/resources`, `/resources/{id}`), `/broadcast`, and `/plans/run`.
-- `@uab/cli`: HTTP server and one-shot call commands for configured runtimes.
+## Packages
+
+| Package | Responsibility |
+| --- | --- |
+| `@uab/protocol` | Bridge envelope, responses, error codes, validation |
+| `@uab/core` | Adapter registry, router, sessions, health scheduling, orchestration, resources, persistence, observability |
+| `@uab/adapter-sdk` | Runtime adapter contract and shared capability types |
+| `@uab/transport-http` | Node.js HTTP transport and endpoints |
+| `@uab/adapter-openclaw` | OpenClaw Gateway adapter (with CLI fallback) |
+| `@uab/adapter-hermes` | Hermes Agent API Server adapter |
+| `@uab/adapter-http-jsonrpc` | Generic adapter for HTTP JSON-RPC agents |
+| `@uab/a2a` | A2A remote-agent registry and JSON-RPC client |
+| `@uab/mcp` | MCP server registry and tool invocation |
+| `@uab/ag-ui` | AG-UI event mapping for frontend/app clients |
+| `@uab/a2ui` | A2UI dynamic-UI envelope validation and sanitization |
+| `@uab/cli` | HTTP server and one-shot call commands |
 
 ## Quick Start
 
@@ -63,118 +55,52 @@ npm run build
 npm test
 ```
 
-Start the HTTP bridge:
+Start the HTTP bridge (with at least one runtime configured — see below), then optionally the dashboard:
 
 ```bash
 npm run serve -- --port 8787
+npm run dashboard   # http://127.0.0.1:5173, API set to http://127.0.0.1:8787
 ```
 
-Configure at least one real runtime before starting the bridge. Without runtime environment variables, `/runtimes` will be empty.
+Configure runtimes with environment variables before `npm run serve`:
 
-Start the dashboard UI in a second terminal:
+| Runtime | Environment variables |
+| --- | --- |
+| HTTP JSON-RPC agent | `UAB_HTTP_RUNTIME_URL`, `UAB_HTTP_RUNTIME_ID` |
+| Hermes | `UAB_HERMES_URL`, `UAB_HERMES_TOKEN` |
+| OpenClaw Gateway | `UAB_OPENCLAW_GATEWAY_URL`, `UAB_OPENCLAW_TOKEN` (or `UAB_OPENCLAW_MODE=cli`) |
+| MCP tool server | `UAB_MCP_SERVER_ID`, `UAB_MCP_SERVER_COMMAND`, `UAB_MCP_SERVER_ARGS` |
+| A2A agent | `UAB_A2A_AGENT_ID`, `UAB_A2A_AGENT_URL` |
+
+Make a call through the bridge:
 
 ```bash
-npm run dashboard
+curl -X POST http://127.0.0.1:8787/rpc \
+  -H "content-type: application/json" \
+  -d '{"jsonrpc":"2.0","id":"req_1","runtime":"openclaw","method":"status","params":{}}'
 ```
 
-Open `http://127.0.0.1:5173` and keep the API endpoint set to `http://127.0.0.1:8787`.
+The same call can be streamed as AG-UI SSE via `/agui/runs`. Per-runtime connection and method details live in [docs/](docs/).
 
-Connect an external HTTP agent:
+## Request Shape
 
-```bash
-npm run example:agent
-$env:UAB_HTTP_RUNTIME_URL="http://127.0.0.1:9000"
-$env:UAB_HTTP_RUNTIME_ID="example-agent"
-npm run serve -- --port 8787
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req_001",
+  "runtime": "openclaw",
+  "session": { "id": "project-main", "action": "create" },
+  "method": "sessions.list",
+  "params": {},
+  "meta": { "timeoutMs": 30000 }
+}
 ```
 
-Connect Hermes:
-
-```bash
-$env:UAB_HERMES_URL="http://127.0.0.1:8642"
-$env:UAB_HERMES_TOKEN="change-me-local-dev"
-npm run serve -- --port 8787
-```
-
-Connect OpenClaw Gateway:
-
-```bash
-$env:UAB_OPENCLAW_GATEWAY_URL="ws://127.0.0.1:18789"
-$env:UAB_OPENCLAW_TOKEN="your-gateway-token"
-npm run serve -- --port 8787
-```
-
-If OpenClaw device pairing is already handled by the local CLI, use fallback mode:
-
-```bash
-$env:UAB_OPENCLAW_MODE="cli"
-npm run serve -- --port 8787
-```
-
-Call OpenClaw through the bridge:
-
-```bash
-curl -X POST http://127.0.0.1:8787/rpc ^
-  -H "content-type: application/json" ^
-  -d "{\"jsonrpc\":\"2.0\",\"id\":\"req_1\",\"runtime\":\"openclaw\",\"method\":\"status\",\"params\":{}}"
-```
-
-Stream the same call through AG-UI SSE:
-
-```bash
-curl -N -X POST http://127.0.0.1:8787/agui/runs ^
-  -H "content-type: application/json" ^
-  -H "accept: text/event-stream" ^
-  -d "{\"threadId\":\"thread_openclaw\",\"runId\":\"run_status\",\"state\":{},\"messages\":[],\"tools\":[],\"context\":[],\"forwardedProps\":{\"uab\":{\"runtime\":\"openclaw\",\"method\":\"status\",\"params\":{}}}}"
-```
-
-Register an MCP stdio tool server:
-
-```bash
-$env:UAB_MCP_SERVER_ID="example"
-$env:UAB_MCP_SERVER_COMMAND="node"
-$env:UAB_MCP_SERVER_ARGS="examples/mcp-stdio-server/server.mjs"
-npm run serve -- --port 8787
-```
-
-Call an MCP tool through the bridge:
-
-```bash
-curl -X POST http://127.0.0.1:8787/rpc ^
-  -H "content-type: application/json" ^
-  -d "{\"jsonrpc\":\"2.0\",\"id\":\"mcp_call\",\"runtime\":\"mcp\",\"method\":\"mcp.tools.call\",\"params\":{\"serverId\":\"example\",\"name\":\"echo\",\"arguments\":{\"text\":\"hello\"}}}"
-```
-
-Register an A2A agent:
-
-```bash
-npm run example:a2a -- --port 9010
-$env:UAB_A2A_AGENT_ID="example"
-$env:UAB_A2A_AGENT_URL="http://127.0.0.1:9010"
-npm run serve -- --port 8787
-```
-
-Send a message through A2A:
-
-```bash
-curl -X POST http://127.0.0.1:8787/rpc ^
-  -H "content-type: application/json" ^
-  -d "{\"jsonrpc\":\"2.0\",\"id\":\"a2a_send\",\"runtime\":\"a2a\",\"method\":\"a2a.message.send\",\"params\":{\"agentId\":\"example\",\"text\":\"hello\"}}"
-```
+The first request for a session binds it to the chosen runtime; later requests can send only the same `session.id`. Replace `runtime` with `capability` to let the bridge pick a healthy runtime. Cancel an in-flight call with `POST /cancel` `{ "requestId": "req_001" }`.
 
 ## Orchestration
 
-Beyond routing one call, the bridge coordinates multiple runtimes.
-
-Route by capability instead of a fixed runtime — the bridge picks a healthy runtime that advertises it, round-robins across candidates, and fails over when one is unavailable:
-
-```bash
-curl -X POST http://127.0.0.1:8787/rpc ^
-  -H "content-type: application/json" ^
-  -d "{\"jsonrpc\":\"2.0\",\"id\":\"cap_1\",\"capability\":\"chat\",\"method\":\"chat.send\",\"params\":{\"text\":\"hello\"}}"
-```
-
-Fan one request out to every runtime advertising a capability with `POST /broadcast`, and run a multi-step plan with `POST /plans/run`. Each step can target a `runtime`, route by `capability`, or hand off to a previous step's runtime; adjacent steps sharing a `parallelGroup` run concurrently, a `when` condition can skip a step, and `params`/`method`/`session`/`meta` can template earlier step results:
+Run a multi-step plan with `POST /plans/run`. Each step targets a `runtime`, routes by `capability`, or hands off to a previous step's runtime; adjacent steps sharing a `parallelGroup` run concurrently, a `when` condition can skip a step, and `params`/`method`/`session`/`meta` can template earlier step results:
 
 ```json
 {
@@ -187,68 +113,23 @@ Fan one request out to every runtime advertising a capability with `POST /broadc
 }
 ```
 
-The plan schema, template reference syntax, and condition grammar are documented in [docs/control-plane.md](docs/control-plane.md).
+`POST /broadcast` fans one request out to every runtime advertising a capability. The plan schema, template reference syntax, and condition grammar are in [docs/control-plane.md](docs/control-plane.md).
 
-## Request Shape
+## HTTP Endpoints
 
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "req_001",
-  "runtime": "openclaw",
-  "session": {
-    "id": "project-main",
-    "action": "create"
-  },
-  "method": "sessions.list",
-  "params": {},
-  "meta": {
-    "timeoutMs": 30000
-  }
-}
-```
+`/rpc` · `/agui/runs` · `/cancel` · `/sessions` · `/runtimes` · `/methods` · `/health` · `/health/runtimes` · `/metrics` · `/traces/{traceId}` · `/resources` (+ `/resources/{id}` CRUD) · `/broadcast` · `/plans/run` · `/audit`
 
-The first request for a session binds it to the selected runtime. Later requests can provide only the same `session.id`; the bridge resolves the runtime from its sticky session table.
+## Documentation
 
-Cancel an active call:
-
-```bash
-curl -X POST http://127.0.0.1:8787/cancel ^
-  -H "content-type: application/json" ^
-  -d "{\"requestId\":\"req_001\"}"
-```
-
-## Repository Layout
-
-```text
-packages/
-  protocol/
-  a2ui/
-  ag-ui/
-  mcp/
-  a2a/
-  adapter-sdk/
-  core/
-  adapter-http-jsonrpc/
-  adapter-hermes/
-  adapter-openclaw/
-  transport-http/
-  cli/
-docs/
-  architecture.md
-  adapter-guide.md
-  protocol.md
-  security.md
-```
+- [architecture.md](docs/architecture.md) — core design and data flow
+- [control-plane.md](docs/control-plane.md) — sessions, health scheduling, orchestration, resources, persistence
+- [protocol.md](docs/protocol.md) — envelope and error codes
+- [adapter-guide.md](docs/adapter-guide.md) — writing a runtime adapter
+- [security.md](docs/security.md) — access policy and scopes
 
 ## Roadmap
 
-- Add MQTT transport as the first remote-first transport.
-- Expand OpenClaw and Hermes adapters with more native method coverage and conformance tests.
-- Expand MCP support with resources, prompts, roots, and sampling.
-- Expose UAB itself as an A2A server with an Agent Card.
-- Expand A2UI dynamic UI with form submission, richer layouts, and chart primitives.
-- Add adapter conformance tests for more real-agent method families.
-- Add token-based auth and pairing flows.
+- Add MQTT and WebSocket transports.
 - Deepen orchestration: step compensation/rollback (saga) and a dynamic planner that chooses steps from prior results.
 - Ship packaged OpenTelemetry/Prometheus exporters on top of the span-exporter hook.
+- Expand adapter method coverage and conformance tests; add token-based auth and pairing flows.
