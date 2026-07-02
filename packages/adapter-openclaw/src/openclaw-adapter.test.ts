@@ -124,6 +124,63 @@ test("OpenClaw adapter normalizes chat.send text params for Gateway schema", asy
   }
 });
 
+test("OpenClaw adapter normalizes agent prompt params for Gateway schema", async () => {
+  const server = createServer();
+  const wss = new WebSocketServer({ server });
+  let agentParams: Record<string, unknown> | undefined;
+
+  wss.on("connection", (socket: WebSocket) => {
+    socket.on("message", (raw: Buffer) => {
+      const frame = JSON.parse(String(raw)) as {
+        id: string;
+        method: string;
+        params?: Record<string, unknown>;
+      };
+      if (frame.method === "agent") agentParams = frame.params;
+      socket.send(JSON.stringify({
+        type: "res",
+        id: frame.id,
+        ok: true,
+        payload: frame.method === "connect"
+          ? { type: "hello-ok", protocol: 4 }
+          : { runId: "agent_req", status: "started" }
+      }));
+    });
+  });
+
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const port = readPort(server);
+
+  try {
+    const adapter = createOpenClawAdapter({
+      gatewayUrl: `ws://127.0.0.1:${port}`
+    });
+    const result = await adapter.call({
+      method: "agent",
+      params: { sessionKey: "default", prompt: "List three capabilities." },
+      raw: {
+        jsonrpc: "2.0",
+        id: "agent_req",
+        runtime: "openclaw",
+        method: "agent"
+      }
+    }, {
+      requestId: "agent_req",
+      traceId: "trace"
+    });
+
+    assert.deepEqual(result, { runId: "agent_req", status: "started" });
+    assert.deepEqual(agentParams, {
+      sessionKey: "default",
+      message: "List three capabilities."
+    });
+  } finally {
+    wss.close();
+    await closeServer(server);
+  }
+});
+
 test("OpenClaw adapter streams Gateway event frames", async () => {
   const server = createServer();
   const wss = new WebSocketServer({ server });

@@ -148,7 +148,7 @@ const DEFAULT_METHODS: RuntimeMethodDefinition[] = [
     description: "Start an OpenClaw agent request.",
     capability: "agent",
     risk: "write",
-    paramsExample: { prompt: "Summarize this workspace", sessionKey: "default" }
+    paramsExample: { message: "Summarize this workspace", sessionKey: "default" }
   },
   {
     name: "agent.wait",
@@ -164,7 +164,7 @@ const DEFAULT_METHODS: RuntimeMethodDefinition[] = [
     description: "Start an OpenClaw agent request and forward Gateway events.",
     capability: "agent",
     risk: "write",
-    paramsExample: { prompt: "Summarize this workspace", sessionKey: "default" }
+    paramsExample: { message: "Summarize this workspace", sessionKey: "default" }
   },
   {
     name: "chat.history",
@@ -549,15 +549,14 @@ function normalizeOpenClawAgentParams(
   context?: AdapterCallContext
 ): JsonObject {
   const object = isJsonObject(params) ? params as JsonObject : {};
-  const prompt = normalizeNonEmptyString(object.prompt)
-    ?? normalizeNonEmptyString(object.text)
-    ?? normalizeNonEmptyString(object.message)
-    ?? (typeof params === "string" ? normalizeNonEmptyString(params) : undefined);
+  const message = readOpenClawMessageText(params, object);
   const output: JsonObject = { ...object };
+  delete output.prompt;
   delete output.text;
-  if (object.message !== undefined && object.prompt === undefined) delete output.message;
+  delete output.input;
+  delete output.content;
   output.sessionKey = readOpenClawSessionKey(object, request, context);
-  if (prompt !== undefined) output.prompt = prompt;
+  if (message !== undefined) output.message = message;
   return output;
 }
 
