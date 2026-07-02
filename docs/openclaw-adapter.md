@@ -55,6 +55,8 @@ uab call openclaw tasks.list "{\"limit\":20}"
 uab call openclaw gateway.call "{\"method\":\"tools.catalog\",\"params\":{}}"
 ```
 
+Use real identifiers returned by OpenClaw when testing lookup methods. For example, call `tasks.list` first, then pass a returned task id to `tasks.get`; placeholder ids such as `task_abc123` will correctly return `task not found`.
+
 Stream a real OpenClaw chat turn through AG-UI:
 
 ```powershell
@@ -64,7 +66,7 @@ curl.exe -N -X POST http://127.0.0.1:8787/agui/runs `
   -d "{\"threadId\":\"thread_openclaw\",\"runId\":\"run_openclaw_stream\",\"state\":{},\"messages\":[],\"tools\":[],\"context\":[],\"forwardedProps\":{\"uab\":{\"runtime\":\"openclaw\",\"method\":\"chat.stream\",\"params\":{\"sessionKey\":\"project-main\",\"message\":\"What changed?\"}}}}"
 ```
 
-For compatibility, the adapter also accepts `text`, `prompt`, `input`, or `content` on `agent`, `agent.stream`, `chat.send`, and `chat.stream`, then converts them to OpenClaw's current `message` field. If `sessionKey` is omitted, it uses the bridge session id when present, otherwise `default`; if `idempotencyKey` is omitted, it uses the bridge request id.
+For compatibility, the adapter also accepts `text`, `prompt`, `input`, or `content` on `agent`, `agent.stream`, `chat.send`, and `chat.stream`, then converts them to OpenClaw's current `message` field. If `sessionKey` is omitted, it uses the bridge session id when present, otherwise `default`; if `idempotencyKey` is omitted, it uses the bridge request id. The standard UAB `chat.stream` and `agent.stream` methods map to OpenClaw's current Gateway methods; raw `gateway.call` requests do not get this compatibility layer and may require broader OpenClaw scopes such as `operator.admin`.
 
 Set scopes explicitly when needed:
 

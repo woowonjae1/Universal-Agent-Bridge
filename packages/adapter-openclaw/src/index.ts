@@ -252,7 +252,7 @@ const DEFAULT_METHODS: RuntimeMethodDefinition[] = [
     description: "List OpenClaw artifacts.",
     capability: "artifacts",
     risk: "read",
-    paramsExample: { sessionKey: "session-key", limit: 50 }
+    paramsExample: { sessionKey: "session-key" }
   },
   {
     name: "artifacts.get",
@@ -430,9 +430,10 @@ export function createOpenClawAdapter(
         return callOpenClaw(method, params.params ?? {}, options, timeoutMs, context.signal);
       }
 
+      const method = mapOpenClawStandardMethod(request.method);
       return callOpenClaw(
-        request.method,
-        normalizeOpenClawStandardParams(request.method, request.params ?? {}, request, context),
+        method,
+        normalizeOpenClawStandardParams(method, request.params ?? {}, request, context),
         options,
         timeoutMs,
         context.signal
@@ -450,7 +451,7 @@ async function* streamOpenClaw(
   options: OpenClawAdapterOptions,
   timeoutMs: number
 ): AsyncIterable<AdapterStreamEvent> {
-  const method = mapOpenClawStreamMethod(request.method);
+  const method = mapOpenClawStandardMethod(request.method);
   const params = normalizeOpenClawStandardParams(method, request.params ?? {}, request, context);
 
   if (options.mode === "cli") {
@@ -512,6 +513,9 @@ function normalizeOpenClawStandardParams(
   if (method === "agent" || method === "agent.stream") {
     return normalizeOpenClawAgentParams(params, request, context);
   }
+  if (method === "artifacts.list") {
+    return normalizeOpenClawArtifactsListParams(params, request, context);
+  }
   return params;
 }
 
@@ -553,6 +557,22 @@ function normalizeOpenClawAgentParams(
   output.sessionKey = readOpenClawSessionKey(object, request, context);
   if (message !== undefined) output.message = message;
   if (idempotencyKey) output.idempotencyKey = idempotencyKey;
+  return output;
+}
+
+function normalizeOpenClawArtifactsListParams(
+  params: unknown,
+  request?: AdapterCallRequest,
+  context?: AdapterCallContext
+): JsonObject {
+  const object = isJsonObject(params) ? params as JsonObject : {};
+  const output: JsonObject = {
+    sessionKey: readOpenClawSessionKey(object, request, context)
+  };
+  copyKnownJsonField(object, output, "agentId");
+  copyKnownJsonField(object, output, "sessionId");
+  copyKnownJsonField(object, output, "runId");
+  copyKnownJsonField(object, output, "taskId");
   return output;
 }
 
@@ -1322,7 +1342,7 @@ function enrichOpenClawGatewayErrorData(error: JsonObject): JsonValue {
   return toJsonValue(error);
 }
 
-function mapOpenClawStreamMethod(method: string): string {
+function mapOpenClawStandardMethod(method: string): string {
   if (method === "agent.stream") return "agent";
   if (method === "chat.stream") return "chat.send";
   return method;
