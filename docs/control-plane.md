@@ -72,7 +72,8 @@ Resume the same session without specifying a runtime:
       "runtime": "openclaw",
       "method": "chat.send",
       "params": {
-        "text": "Extract the actionable items from this workspace"
+        "sessionKey": "default",
+        "message": "Extract the actionable items from this workspace"
       }
     },
     {
@@ -81,7 +82,8 @@ Resume the same session without specifying a runtime:
       "capability": "chat",
       "method": "chat.send",
       "params": {
-        "text": "Score these items: ${steps.extract.result.items}"
+        "sessionKey": "default",
+        "message": "Score these items: ${steps.extract.result}"
       }
     },
     {
@@ -90,7 +92,8 @@ Resume the same session without specifying a runtime:
       "capability": "chat",
       "method": "chat.send",
       "params": {
-        "text": "Summarize these items: ${steps.extract.result.items}"
+        "sessionKey": "default",
+        "message": "Summarize these items: ${steps.extract.result}"
       }
     },
     {
@@ -108,7 +111,8 @@ Resume the same session without specifying a runtime:
         "equals": true
       },
       "params": {
-        "text": "Continue with the approved summary: ${steps.summarize.result.text}"
+        "sessionKey": "default",
+        "message": "Continue with the approved summary: ${steps.summarize.result}"
       }
     }
   ]
@@ -116,6 +120,8 @@ Resume the same session without specifying a runtime:
 ```
 
 Template references that fill a whole string preserve the referenced JSON type. For example, `"${steps.extract.result.items}"` passes an array/object through as JSON; embedded references such as `"items=${steps.extract.result.count}"` render as strings. If a reference cannot be resolved, the step fails with an invalid-request error instead of silently passing `null`.
+
+The OpenClaw adapter accepts both the current Gateway shape (`message`) and older/simple aliases (`text`, `prompt`, `input`, `content`) for `chat.send` and `chat.stream`. It normalizes those aliases before calling OpenClaw, and fills `sessionKey` from the bridge session id or `default` when omitted.
 
 Use `POST /plans` for asynchronous execution:
 

@@ -115,7 +115,8 @@ Start a durable multi-step plan run with `POST /plans`, or use `POST /plans/run`
       "capability": "chat",
       "method": "chat.send",
       "params": {
-        "text": "Extract the key facts"
+        "sessionKey": "default",
+        "message": "Extract the key facts"
       }
     },
     {
@@ -126,7 +127,8 @@ Start a durable multi-step plan run with `POST /plans`, or use `POST /plans/run`
       },
       "method": "chat.send",
       "params": {
-        "text": "Double-check the extraction: ${steps.extract.result.text}"
+        "sessionKey": "default",
+        "message": "Double-check the extraction: ${steps.extract.result}"
       }
     }
   ]

@@ -64,13 +64,78 @@ test("OpenClaw adapter performs Gateway connect then RPC call", async () => {
   }
 });
 
-test("OpenClaw adapter streams Gateway event frames", async () => {
+test("OpenClaw adapter normalizes chat.send text params for Gateway schema", async () => {
   const server = createServer();
   const wss = new WebSocketServer({ server });
+  let chatParams: Record<string, unknown> | undefined;
 
   wss.on("connection", (socket: WebSocket) => {
     socket.on("message", (raw: Buffer) => {
-      const frame = JSON.parse(String(raw)) as { id: string; method: string };
+      const frame = JSON.parse(String(raw)) as {
+        id: string;
+        method: string;
+        params?: Record<string, unknown>;
+      };
+      if (frame.method === "chat.send") chatParams = frame.params;
+      socket.send(JSON.stringify({
+        type: "res",
+        id: frame.id,
+        ok: true,
+        payload: frame.method === "connect"
+          ? { type: "hello-ok", protocol: 4 }
+          : { runId: "chat_req", status: "started" }
+      }));
+    });
+  });
+
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const port = readPort(server);
+
+  try {
+    const adapter = createOpenClawAdapter({
+      gatewayUrl: `ws://127.0.0.1:${port}`
+    });
+    const result = await adapter.call({
+      method: "chat.send",
+      params: { text: "hello" },
+      raw: {
+        jsonrpc: "2.0",
+        id: "chat_req",
+        runtime: "openclaw",
+        session: { id: "project-main" },
+        method: "chat.send"
+      }
+    }, {
+      requestId: "chat_req",
+      traceId: "trace"
+    });
+
+    assert.deepEqual(result, { runId: "chat_req", status: "started" });
+    assert.deepEqual(chatParams, {
+      sessionKey: "project-main",
+      message: "hello",
+      deliver: false,
+      idempotencyKey: "chat_req"
+    });
+  } finally {
+    wss.close();
+    await closeServer(server);
+  }
+});
+
+test("OpenClaw adapter streams Gateway event frames", async () => {
+  const server = createServer();
+  const wss = new WebSocketServer({ server });
+  let chatParams: Record<string, unknown> | undefined;
+
+  wss.on("connection", (socket: WebSocket) => {
+    socket.on("message", (raw: Buffer) => {
+      const frame = JSON.parse(String(raw)) as {
+        id: string;
+        method: string;
+        params?: Record<string, unknown>;
+      };
       if (frame.method === "connect") {
         socket.send(JSON.stringify({
           type: "res",
@@ -81,6 +146,7 @@ test("OpenClaw adapter streams Gateway event frames", async () => {
         return;
       }
 
+      if (frame.method === "chat.send") chatParams = frame.params;
       socket.send(JSON.stringify({
         type: "event",
         event: "message.delta",
@@ -139,6 +205,12 @@ test("OpenClaw adapter streams Gateway event frames", async () => {
       "artifact",
       "result"
     ]);
+    assert.deepEqual(chatParams, {
+      sessionKey: "s1",
+      message: "hi",
+      deliver: false,
+      idempotencyKey: "req"
+    });
   } finally {
     wss.close();
     await closeServer(server);

@@ -180,7 +180,7 @@ const DEFAULT_METHODS: RuntimeMethodDefinition[] = [
     description: "Send a chat message through OpenClaw Gateway.",
     capability: "chat",
     risk: "write",
-    paramsExample: { sessionKey: "session-key", text: "Hello" }
+    paramsExample: { sessionKey: "session-key", message: "Hello" }
   },
   {
     name: "chat.stream",
@@ -188,7 +188,7 @@ const DEFAULT_METHODS: RuntimeMethodDefinition[] = [
     description: "Send a chat message and forward OpenClaw Gateway events.",
     capability: "chat",
     risk: "write",
-    paramsExample: { sessionKey: "session-key", text: "Hello" }
+    paramsExample: { sessionKey: "session-key", message: "Hello" }
   },
   {
     name: "chat.abort",
@@ -430,7 +430,13 @@ export function createOpenClawAdapter(
         return callOpenClaw(method, params.params ?? {}, options, timeoutMs, context.signal);
       }
 
-      return callOpenClaw(request.method, request.params ?? {}, options, timeoutMs, context.signal);
+      return callOpenClaw(
+        request.method,
+        normalizeOpenClawStandardParams(request.method, request.params ?? {}, request, context),
+        options,
+        timeoutMs,
+        context.signal
+      );
     },
     stream(request, context) {
       return streamOpenClaw(request, context, options, timeoutMs);
@@ -445,11 +451,12 @@ async function* streamOpenClaw(
   timeoutMs: number
 ): AsyncIterable<AdapterStreamEvent> {
   const method = mapOpenClawStreamMethod(request.method);
+  const params = normalizeOpenClawStandardParams(method, request.params ?? {}, request, context);
 
   if (options.mode === "cli") {
     const result = await callOpenClawCli(
       method,
-      request.params ?? {},
+      params,
       options,
       timeoutMs,
       context.signal
@@ -462,7 +469,7 @@ async function* streamOpenClaw(
   }
 
   const queue = createAsyncQueue<AdapterStreamEvent>();
-  void callOpenClawGatewayWithEvents(method, request.params ?? {}, options, timeoutMs, context.signal, (event) => {
+  void callOpenClawGatewayWithEvents(method, params, options, timeoutMs, context.signal, (event) => {
     queue.push(openClawEventToStreamEvent(event));
   }).then((result) => {
     queue.push({
@@ -491,6 +498,99 @@ async function callOpenClaw(
   }
 
   return callOpenClawGateway(method, params, options, timeoutMs, signal);
+}
+
+function normalizeOpenClawStandardParams(
+  method: string,
+  params: unknown,
+  request?: AdapterCallRequest,
+  context?: AdapterCallContext
+): unknown {
+  if (method === "chat.send") {
+    return normalizeOpenClawChatSendParams(params, request, context);
+  }
+  if (method === "agent" || method === "agent.stream") {
+    return normalizeOpenClawAgentParams(params, request, context);
+  }
+  return params;
+}
+
+function normalizeOpenClawChatSendParams(
+  params: unknown,
+  request?: AdapterCallRequest,
+  context?: AdapterCallContext
+): JsonObject {
+  const object = isJsonObject(params) ? params as JsonObject : {};
+  const message = readOpenClawMessageText(params, object);
+  const sessionKey = readOpenClawSessionKey(object, request, context);
+  const idempotencyKey = normalizeNonEmptyString(object.idempotencyKey)
+    ?? normalizeNonEmptyString(object.idempotency_key)
+    ?? normalizeNonEmptyString(object.runId)
+    ?? normalizeNonEmptyString(object.run_id)
+    ?? readIdLike(request?.raw.id)
+    ?? readIdLike(context?.requestId);
+
+  const output: JsonObject = {};
+  copyKnownJsonField(object, output, "agentId");
+  copyKnownJsonField(object, output, "sessionId");
+  copyKnownJsonField(object, output, "__controlUiReconnectResume");
+  copyKnownJsonField(object, output, "attachments");
+
+  output.sessionKey = sessionKey;
+  if (message !== undefined) output.message = message;
+  output.deliver = typeof object.deliver === "boolean" ? object.deliver : false;
+  if (idempotencyKey) output.idempotencyKey = idempotencyKey;
+  return output;
+}
+
+function normalizeOpenClawAgentParams(
+  params: unknown,
+  request?: AdapterCallRequest,
+  context?: AdapterCallContext
+): JsonObject {
+  const object = isJsonObject(params) ? params as JsonObject : {};
+  const prompt = normalizeNonEmptyString(object.prompt)
+    ?? normalizeNonEmptyString(object.text)
+    ?? normalizeNonEmptyString(object.message)
+    ?? (typeof params === "string" ? normalizeNonEmptyString(params) : undefined);
+  const output: JsonObject = { ...object };
+  delete output.text;
+  if (object.message !== undefined && object.prompt === undefined) delete output.message;
+  output.sessionKey = readOpenClawSessionKey(object, request, context);
+  if (prompt !== undefined) output.prompt = prompt;
+  return output;
+}
+
+function readOpenClawMessageText(params: unknown, object: JsonObject): string | undefined {
+  return normalizeNonEmptyString(object.message)
+    ?? normalizeNonEmptyString(object.text)
+    ?? normalizeNonEmptyString(object.prompt)
+    ?? normalizeNonEmptyString(object.input)
+    ?? normalizeNonEmptyString(object.content)
+    ?? (typeof params === "string" ? normalizeNonEmptyString(params) : undefined)
+    ?? (object.message === undefined ? undefined : JSON.stringify(object.message));
+}
+
+function readOpenClawSessionKey(
+  params: JsonObject,
+  request?: AdapterCallRequest,
+  context?: AdapterCallContext
+): string {
+  return normalizeNonEmptyString(params.sessionKey)
+    ?? normalizeNonEmptyString(params.session_key)
+    ?? normalizeNonEmptyString(request?.raw.session?.id)
+    ?? normalizeNonEmptyString(context?.session?.id)
+    ?? "default";
+}
+
+function copyKnownJsonField(input: JsonObject, output: JsonObject, key: string): void {
+  if (input[key] !== undefined) output[key] = input[key];
+}
+
+function readIdLike(value: unknown): string | undefined {
+  const text = normalizeNonEmptyString(value);
+  if (text) return text;
+  return typeof value === "number" && Number.isFinite(value) ? String(value) : undefined;
 }
 
 async function callOpenClawGateway(
@@ -1167,7 +1267,7 @@ function openClawFrameError(error: unknown): AdapterError {
       : "OpenClaw Gateway returned an error.";
     const data = enrichOpenClawGatewayErrorData(toJsonValue(error) as JsonObject);
     return new AdapterError(message, {
-      code: typeof error.code === "number" ? error.code : BRIDGE_ERROR_CODES.adapterUnavailable,
+      code: typeof error.code === "number" ? error.code : mapOpenClawStringErrorCode(error.code),
       data
     });
   }
@@ -1175,6 +1275,17 @@ function openClawFrameError(error: unknown): AdapterError {
   return new AdapterError("OpenClaw Gateway returned an error.", {
     code: BRIDGE_ERROR_CODES.adapterUnavailable
   });
+}
+
+function mapOpenClawStringErrorCode(code: unknown): number {
+  switch (code) {
+    case "INVALID_REQUEST": return BRIDGE_ERROR_CODES.invalidRequest;
+    case "INVALID_PARAMS": return BRIDGE_ERROR_CODES.invalidParams;
+    case "METHOD_NOT_FOUND": return BRIDGE_ERROR_CODES.methodNotFound;
+    case "PERMISSION_DENIED": return BRIDGE_ERROR_CODES.permissionDenied;
+    case "PARSE_ERROR": return BRIDGE_ERROR_CODES.parseError;
+    default: return BRIDGE_ERROR_CODES.adapterUnavailable;
+  }
 }
 
 function enrichOpenClawGatewayErrorData(error: JsonObject): JsonValue {
