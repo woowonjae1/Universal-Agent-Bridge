@@ -69,6 +69,8 @@ export interface BridgePlanStep {
   dependsOn?: string | string[];
   parallelGroup?: string;
   when?: BridgePlanCondition;
+  stream?: boolean;
+  streamFrom?: string | string[];
 }
 
 export interface BridgePlan {
@@ -87,6 +89,7 @@ export interface BridgePlanStepResult {
   response: BridgeResponse;
   traceId: string;
   input?: JsonValue;
+  streamText?: string;
 }
 
 export type BridgePlanRunStatus = "pending" | "running" | "succeeded" | "failed" | "cancelled";
@@ -98,6 +101,7 @@ export interface BridgePlanRunStep {
   status: BridgePlanRunStepStatus;
   method: string;
   dependsOn: string[];
+  streamFrom?: string[];
   traceId: string;
   requestId: string;
   runtime?: string;
@@ -105,6 +109,7 @@ export interface BridgePlanRunStep {
   completedAt?: string;
   input?: JsonValue;
   response?: BridgeResponse;
+  streamText?: string;
 }
 
 export interface BridgePlanRunSnapshot {
@@ -583,6 +588,51 @@ export class AgentBridge {
     this.persistState();
 
     const state = this.createPlanExecutionState(run);
+    const stepPromises = new Map<string, Promise<BridgePlanStepResult>>();
+
+    const launchStep = (stepRun: BridgePlanRunStep): void => {
+      stepRun.status = "running";
+      stepRun.startedAt = new Date().toISOString();
+
+      const defn = run.plan.steps[stepRun.index];
+      if (defn.stream) {
+        let notify!: () => void;
+        const started = new Promise<void>((r) => { notify = r; });
+        state.stepStreamNotifiers.set(stepRun.stepId, () => {
+          if (!state.stepStreamStarted.has(stepRun.stepId)) {
+            state.stepStreamStarted.add(stepRun.stepId);
+            notify();
+          }
+        });
+        state.stepStreamStartedPromises.set(stepRun.stepId, started);
+      }
+
+      const p = this.executePlanStep(
+        defn,
+        stepRun,
+        defaultHandoffSource(stepRun, run.steps),
+        state,
+        signal,
+        principal
+      ).then((result) => {
+        stepPromises.delete(stepRun.stepId);
+        stepRun.status = result.status;
+        stepRun.runtime = result.runtime;
+        stepRun.completedAt = new Date().toISOString();
+        stepRun.input = result.input;
+        stepRun.response = result.response;
+        if (result.streamText !== undefined) stepRun.streamText = result.streamText;
+        state.stepResults.set(result.stepId, result);
+        if (result.runtime) state.stepRuntimes.set(result.stepId, result.runtime);
+        run.final = result.response;
+        run.updatedAt = new Date().toISOString();
+        this.persistState();
+        // Ensure stream-start notifier fires even if the step completed without streaming
+        state.stepStreamNotifiers.get(result.stepId)?.();
+        return result;
+      });
+      stepPromises.set(stepRun.stepId, p);
+    };
 
     while (true) {
       if (signal.aborted) {
@@ -591,60 +641,54 @@ export class AgentBridge {
       }
 
       const pending = run.steps.filter((step) => step.status === "pending");
-      if (pending.length === 0) break;
+      if (pending.length === 0 && stepPromises.size === 0) break;
 
-      const ready = pending.filter((step) => step.dependsOn.every((dependency) => {
-        const upstream = run.steps.find((entry) => entry.stepId === dependency);
-        return upstream ? isTerminalPlanStepStatus(upstream.status) : false;
-      }));
+      const ready = pending.filter((stepRun) => {
+        // Normal dependsOn: all must be terminal
+        if (!stepRun.dependsOn.every((dep) => {
+          const up = run.steps.find((s) => s.stepId === dep);
+          return up ? isTerminalPlanStepStatus(up.status) : false;
+        })) return false;
+        // streamFrom: source must be running-and-streaming-started, or terminal
+        return (stepRun.streamFrom ?? []).every((dep) => {
+          const up = run.steps.find((s) => s.stepId === dep);
+          if (!up) return false;
+          if (isTerminalPlanStepStatus(up.status)) return true;
+          return up.status === "running" && state.stepStreamStarted.has(dep);
+        });
+      });
 
-      if (ready.length === 0) {
+      for (const stepRun of ready) {
+        launchStep(stepRun);
+      }
+
+      run.updatedAt = new Date().toISOString();
+      this.persistState();
+
+      if (stepPromises.size === 0) {
         this.markPlanRunFailed(run, createErrorResponse({
           code: BRIDGE_ERROR_CODES.invalidRequest,
-          message: "Plan run cannot make progress. Check for missing or cyclic dependsOn references."
+          message: "Plan run cannot make progress. Check for missing or cyclic dependsOn/streamFrom references."
         }));
         return run;
       }
 
-      for (const step of ready) {
-        step.status = "running";
-        step.startedAt = new Date().toISOString();
+      // Collect wakeup signals: step completions + streaming starts for pending streamFrom deps
+      const wakeups: Promise<unknown>[] = [...stepPromises.values()];
+      for (const [stepId, startedPromise] of state.stepStreamStartedPromises) {
+        const stepRun = run.steps.find((s) => s.stepId === stepId);
+        if (stepRun?.status === "running" && !state.stepStreamStarted.has(stepId)) {
+          wakeups.push(startedPromise);
+        }
       }
-      run.updatedAt = new Date().toISOString();
-      this.persistState();
+      await Promise.race(wakeups).catch(() => undefined);
 
-      const results = await Promise.all(
-        ready.map((stepRun) =>
-          this.executePlanStep(
-            run.plan.steps[stepRun.index],
-            stepRun,
-            defaultHandoffSource(stepRun, run.steps),
-            state,
-            signal,
-            principal
-          )
-        )
+      const hasError = run.steps.some(
+        (s) => (s.status === "error" || s.status === "cancelled") && !stepPromises.has(s.stepId)
       );
-
-      for (const result of results) {
-        const stepRun = run.steps.find((entry) => entry.stepId === result.stepId);
-        if (!stepRun) continue;
-        stepRun.status = result.status;
-        stepRun.runtime = result.runtime;
-        stepRun.completedAt = new Date().toISOString();
-        stepRun.input = result.input;
-        stepRun.response = result.response;
-        state.stepResults.set(result.stepId, result);
-        if (result.runtime) state.stepRuntimes.set(result.stepId, result.runtime);
-      }
-
-      run.final = results.at(-1)?.response ?? run.final;
-      run.updatedAt = new Date().toISOString();
-      this.persistState();
-
-      const failed = results.some((entry) => entry.status === "error" || entry.status === "cancelled");
-      if (failed && run.plan.stopOnError !== false) {
-        if (signal.aborted || results.some((entry) => entry.status === "cancelled")) {
+      if (hasError && run.plan.stopOnError !== false) {
+        await Promise.allSettled([...stepPromises.values()]);
+        if (signal.aborted || run.steps.some((s) => s.status === "cancelled")) {
           this.markPlanRunCancelled(run, abortErrorFromSignal(signal));
         } else {
           run.status = "failed";
@@ -669,7 +713,11 @@ export class AgentBridge {
       planId: run.id,
       baseTraceId: run.traceId,
       stepRuntimes: new Map(),
-      stepResults: new Map()
+      stepResults: new Map(),
+      stepStreamText: new Map(),
+      stepStreamStarted: new Set(),
+      stepStreamNotifiers: new Map(),
+      stepStreamStartedPromises: new Map()
     };
 
     for (const step of run.steps) {
@@ -680,10 +728,12 @@ export class AgentBridge {
         status: toPlanStepResultStatus(step.status),
         response: step.response,
         traceId: step.traceId,
-        input: step.input
+        input: step.input,
+        streamText: step.streamText
       };
       state.stepResults.set(step.stepId, result);
       if (step.runtime) state.stepRuntimes.set(step.stepId, step.runtime);
+      if (step.streamText) state.stepStreamText.set(step.stepId, step.streamText);
     }
 
     return state;
@@ -817,6 +867,10 @@ export class AgentBridge {
       return { stepId, status: "error", response, traceId };
     }
 
+    if (step.stream === true) {
+      return this.executeStreamingPlanStep(step, stepRun, request, state, signal, traceId, principal);
+    }
+
     const onAbort = () => this.cancel(String(request.id ?? traceId));
     signal.addEventListener("abort", onAbort, { once: true });
     let response: BridgeResponse;
@@ -833,6 +887,70 @@ export class AgentBridge {
       response,
       traceId,
       input: request.params
+    };
+  }
+
+  private async executeStreamingPlanStep(
+    step: BridgePlanStep,
+    stepRun: BridgePlanRunStep,
+    request: BridgeRequest,
+    state: BridgePlanExecutionState,
+    signal: AbortSignal,
+    traceId: string,
+    principal?: Principal
+  ): Promise<BridgePlanStepResult> {
+    const stepId = stepRun.stepId;
+    const notifyStreamStart = state.stepStreamNotifiers.get(stepId);
+    let streamText = "";
+    let finalResponse: BridgeResponse | undefined;
+
+    const onAbort = () => this.cancel(String(request.id ?? traceId));
+    signal.addEventListener("abort", onAbort, { once: true });
+    try {
+      let started = false;
+      for await (const event of this.streamCall(request, principal)) {
+        if (!started) {
+          started = true;
+          notifyStreamStart?.();
+        }
+        if (event.type === "text") {
+          streamText += event.delta;
+          state.stepStreamText.set(stepId, streamText);
+          stepRun.streamText = streamText;
+        } else if (event.type === "result") {
+          finalResponse = createSuccessResponse(request, event.data as JsonValue ?? null);
+        } else if (event.type === "error") {
+          finalResponse = createErrorResponse({
+            id: request.id,
+            code: typeof event.code === "number" ? event.code : BRIDGE_ERROR_CODES.adapterUnavailable,
+            message: event.message
+          });
+        }
+      }
+      notifyStreamStart?.();
+    } catch (err) {
+      notifyStreamStart?.();
+      signal.removeEventListener("abort", onAbort);
+      const errMsg = err instanceof Error ? err.message : "Adapter stream failed.";
+      const response = createErrorResponse({
+        id: request.id,
+        code: BRIDGE_ERROR_CODES.adapterUnavailable,
+        message: errMsg
+      });
+      return { stepId, status: "error", response, traceId, input: request.params, streamText: streamText || undefined };
+    }
+    signal.removeEventListener("abort", onAbort);
+
+    const response = finalResponse ?? createSuccessResponse(request, streamText ? { text: streamText } : null);
+    const successfulRuntime = this.latestRuntimeForRequest(request.id, traceId);
+    return {
+      stepId,
+      runtime: successfulRuntime,
+      status: signal.aborted ? "cancelled" : "error" in response ? "error" : "success",
+      response,
+      traceId,
+      input: request.params,
+      streamText: streamText || undefined
     };
   }
 
@@ -1386,6 +1504,10 @@ interface BridgePlanExecutionState {
   baseTraceId: string;
   stepRuntimes: Map<string, string>;
   stepResults: Map<string, BridgePlanStepResult>;
+  stepStreamText: Map<string, string>;
+  stepStreamStarted: Set<string>;
+  stepStreamNotifiers: Map<string, () => void>;
+  stepStreamStartedPromises: Map<string, Promise<void>>;
 }
 
 type RuntimeResolution =
@@ -1415,15 +1537,20 @@ function normalizePlanRunSteps(plan: BridgePlan, runId: string, traceId: string)
     ? normalizeDagDependencies(plan.steps)
     : normalizeSequenceDependencies(plan.steps, stepIds);
 
-  return plan.steps.map((step, index) => ({
-    stepId: stepIds[index],
-    index,
-    status: "pending",
-    method: step.method,
-    dependsOn: dependencies[index],
-    traceId: `${traceId}.${stepIds[index]}`,
-    requestId: `${runId}_${stepIds[index]}`
-  }));
+  return plan.steps.map((step, index) => {
+    const streamFrom = normalizeDependsOn(step.streamFrom);
+    const entry: BridgePlanRunStep = {
+      stepId: stepIds[index],
+      index,
+      status: "pending",
+      method: step.method,
+      dependsOn: dependencies[index],
+      traceId: `${traceId}.${stepIds[index]}`,
+      requestId: `${runId}_${stepIds[index]}`
+    };
+    if (streamFrom.length > 0) entry.streamFrom = streamFrom;
+    return entry;
+  });
 }
 
 function normalizeDagDependencies(steps: BridgePlanStep[]): string[][] {
@@ -1502,7 +1629,8 @@ function toPlanRunResult(run: BridgePlanRunSnapshot): unknown {
         message: `Plan step '${step.stepId}' did not complete.`
       }),
       traceId: step.traceId,
-      input: step.input
+      input: step.input,
+      ...(step.streamText !== undefined ? { streamText: step.streamText } : {})
     })),
     final: run.final
   };
@@ -1519,7 +1647,8 @@ function resetPlanRunForResume(run: BridgePlanRunSnapshot): BridgePlanRunSnapsho
       startedAt: undefined,
       completedAt: undefined,
       input: undefined,
-      response: undefined
+      response: undefined,
+      streamText: undefined
     };
   });
   return {
@@ -1689,7 +1818,15 @@ function planContext(state: BridgePlanExecutionState): JsonObject {
     if (result.runtime) step.runtime = result.runtime;
     if ("result" in result.response) step.result = result.response.result;
     if ("error" in result.response) step.error = toJsonValue(result.response.error);
+    const streamText = result.streamText ?? state.stepStreamText.get(stepId);
+    if (streamText) step.stream = { text: streamText };
     steps[stepId] = step;
+  }
+  // Also expose stream text for steps that are running (not yet in stepResults)
+  for (const [stepId, text] of state.stepStreamText.entries()) {
+    if (!steps[stepId]) {
+      steps[stepId] = { stepId, status: "running", stream: { text } };
+    }
   }
   return {
     plan: {

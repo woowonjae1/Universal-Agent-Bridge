@@ -1487,6 +1487,33 @@ select {
   color: var(--muted);
 }
 
+.stream-tag {
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+.stream-preview {
+  padding: 0 13px 10px 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.stream-text {
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--surface-strong);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--fg);
+  border-left: 2px solid var(--accent);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 160px;
+  overflow-y: auto;
+}
+
 .step-body {
   padding: 0 13px 13px;
   display: flex;

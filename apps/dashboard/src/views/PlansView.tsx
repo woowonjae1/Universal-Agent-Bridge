@@ -23,28 +23,29 @@ interface PlansViewProps {
 
 const EXAMPLE_PLAN = JSON.stringify(
   {
-    id: "openclaw_pipeline",
+    id: "streaming_pipeline",
     mode: "dag",
     timeoutMs: 120000,
     stopOnError: true,
     steps: [
       {
-        id: "extract",
+        id: "generate",
         runtime: "openclaw",
         method: "agent",
+        stream: true,
         params: {
-          sessionKey: "default",
-          prompt: "List three key capabilities of a multi-agent bridge system."
+          sessionKey: "uab_demo",
+          prompt: "In exactly 3 sentences, explain what a multi-agent bridge does and why it matters."
         }
       },
       {
         id: "review",
         runtime: "openclaw",
-        dependsOn: ["extract"],
+        streamFrom: ["generate"],
         method: "agent",
         params: {
-          sessionKey: "default",
-          prompt: "Review and summarize the previous output in one sentence."
+          sessionKey: "uab_review",
+          prompt: "Rate the clarity of the following text 1–10 and explain your score in one sentence:\n\n${steps.generate.stream.text}"
         }
       }
     ]
@@ -97,9 +98,12 @@ export function PlansView({ apiBase, refreshKey }: PlansViewProps) {
       return;
     }
     if (pollRef.current) return;
+    const hasStreaming = runs.some((run) =>
+      run.steps.some((step) => step.status === "running" && step.streamText !== undefined)
+    );
     pollRef.current = window.setInterval(() => {
       void loadRuns();
-    }, 1200);
+    }, hasStreaming ? 400 : 1200);
     return () => {
       if (pollRef.current) {
         window.clearInterval(pollRef.current);
@@ -321,14 +325,31 @@ function StepCard({ step }: { step: PlanRunStep }) {
           />
         </span>
       </button>
-      {step.dependsOn.length > 0 && (
+      {(step.dependsOn.length > 0 || (step.streamFrom && step.streamFrom.length > 0)) && (
         <div className="depends-row">
-          depends on{" "}
-          {step.dependsOn.map((dep) => (
-            <span key={dep} className="dep-tag">
-              {dep}
-            </span>
-          ))}
+          {step.dependsOn.length > 0 && (
+            <>
+              depends on{" "}
+              {step.dependsOn.map((dep) => (
+                <span key={dep} className="dep-tag">{dep}</span>
+              ))}
+            </>
+          )}
+          {step.streamFrom && step.streamFrom.length > 0 && (
+            <>
+              {step.dependsOn.length > 0 && " · "}
+              stream from{" "}
+              {step.streamFrom.map((dep) => (
+                <span key={dep} className="dep-tag stream-tag">{dep}</span>
+              ))}
+            </>
+          )}
+        </div>
+      )}
+      {step.streamText && (
+        <div className="stream-preview">
+          <span className="io-label">{step.status === "running" ? "streaming…" : "streamed"}</span>
+          <div className="stream-text">{step.streamText}</div>
         </div>
       )}
       {open && (
@@ -345,7 +366,7 @@ function StepCard({ step }: { step: PlanRunStep }) {
               <pre>{JSON.stringify(step.response, null, 2)}</pre>
             </div>
           )}
-          {step.input === undefined && !step.response && (
+          {step.input === undefined && !step.response && !step.streamText && (
             <div className="empty-state compact-empty">No output yet</div>
           )}
         </div>

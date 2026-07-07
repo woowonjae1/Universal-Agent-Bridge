@@ -32,6 +32,7 @@ export interface PlanRunStep {
   status: PlanStepStatus;
   method: string;
   dependsOn: string[];
+  streamFrom?: string[];
   traceId: string;
   requestId: string;
   runtime?: string;
@@ -39,6 +40,7 @@ export interface PlanRunStep {
   completedAt?: string;
   input?: unknown;
   response?: BridgeResponse;
+  streamText?: string;
 }
 
 export interface PlanRun {
