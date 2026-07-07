@@ -28,7 +28,7 @@ This is multi-agent **infrastructure**: the routing and orchestration layer that
 - **Runtimes & adapters.** Every backend is an adapter implementing one contract (`capabilities`, `call`, optional `stream`, `health`, lifecycle). Registering an adapter is all it takes to expose a runtime; the core never changes.
 - **Protocol.** One JSON-RPC-style envelope (`runtime`/`capability`, `method`, `params`, `session`, `meta`) with a shared response and error-code shape. Requests arrive over a transport (HTTP today) and are validated before routing.
 - **Routing & sessions.** A request targets a runtime by id, by `capability`, or by a sticky `session`: the first call binds a session to a runtime, later calls reuse it without re-specifying the runtime.
-- **Orchestration.** On top of single calls the bridge can select a runtime by capability, fan out to all runtimes with a capability (`broadcast`), and run persistent multi-step plan runs with DAG `dependsOn`, handoff, conditional skips, dataflow between steps, plan-level cancellation, timeout, and resume.
+- **Orchestration.** On top of single calls the bridge can select a runtime by capability, fan out to all runtimes with a capability (`broadcast`), and run persistent multi-step plan runs with DAG `dependsOn`, handoff, conditional skips, dataflow between steps, plan-level cancellation, timeout, and resume. Steps can stream (`stream: true`): the bridge drives the adapter's stream, accumulates the text, and exposes it to downstream steps as `${steps.<id>.stream.text}`; a `streamFrom` dependency lets a step start as soon as its source begins streaming instead of waiting for it to finish.
 - **Governance.** Per-runtime circuit breaking with retries and failover, global and per-runtime concurrency limits, cancellation and timeouts, an audit log, a normalized memory/artifact resource index, batched atomic persistence, and metrics/tracing with a dependency-free span-exporter hook apply to every call and orchestration step.
 
 ## Packages
@@ -39,7 +39,7 @@ This is multi-agent **infrastructure**: the routing and orchestration layer that
 | `@uab/core` | Adapter registry, router, sessions, health scheduling, orchestration, resources, persistence, observability |
 | `@uab/adapter-sdk` | Runtime adapter contract and shared capability types |
 | `@uab/transport-http` | Node.js HTTP transport and endpoints |
-| `@uab/adapter-openclaw` | OpenClaw Gateway adapter with CLI fallback |
+| `@uab/adapter-openclaw` | OpenClaw Gateway adapter with streaming turns and CLI fallback |
 | `@uab/adapter-hermes` | Hermes Agent API Server adapter |
 | `@uab/adapter-http-jsonrpc` | Generic adapter for HTTP JSON-RPC agents |
 | `@uab/a2a` | A2A remote-agent registry and JSON-RPC client |
@@ -136,6 +136,42 @@ Start a durable multi-step plan run with `POST /plans`, or use `POST /plans/run`
 ```
 
 Query plan runs with `GET /plans` and `GET /plans/{runId}`. Stop or resume them with `POST /plans/{runId}/cancel` and `POST /plans/{runId}/resume`. `POST /broadcast` fans one request out to every runtime advertising a capability. The plan schema, template reference syntax, and condition grammar are in [docs/control-plane.md](docs/control-plane.md).
+
+### Streaming across runtimes
+
+A step marked `stream: true` runs through the adapter's streaming path; its accumulated text is available to downstream steps as `${steps.<id>.stream.text}`. Because each step targets its own `runtime`, one plan can chain heterogeneous runtimes and pass streamed output across the boundary:
+
+```json
+{
+  "id": "heterogeneous_pipeline",
+  "mode": "dag",
+  "steps": [
+    {
+      "id": "generate",
+      "runtime": "openclaw",
+      "method": "chat.stream",
+      "stream": true,
+      "params": { "sessionKey": "demo", "message": "In one sentence, what is a multi-agent bridge?" }
+    },
+    {
+      "id": "relay",
+      "runtime": "a2a",
+      "dependsOn": ["generate"],
+      "method": "a2a.message.send",
+      "params": { "text": "${steps.generate.stream.text}" }
+    },
+    {
+      "id": "summarize",
+      "runtime": "http-agent",
+      "dependsOn": ["relay"],
+      "method": "system.ping",
+      "params": { "message": "relayed: ${steps.relay.result.result.message.parts[0].text}" }
+    }
+  ]
+}
+```
+
+This exact plan is verified end-to-end: a streamed OpenClaw turn feeds an A2A JSON-RPC agent, whose structured reply feeds an HTTP JSON-RPC agent — three different runtime protocols coordinated in one DAG.
 
 ## HTTP Endpoints
 
