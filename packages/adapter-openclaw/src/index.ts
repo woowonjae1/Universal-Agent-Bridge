@@ -453,6 +453,10 @@ async function* streamOpenClaw(
 ): AsyncIterable<AdapterStreamEvent> {
   const method = mapOpenClawStandardMethod(request.method);
   const params = normalizeOpenClawStandardParams(method, request.params ?? {}, request, context);
+  // The gateway echoes the same turn on both the `chat` and `agent` event
+  // channels. Consume only the one matching the requested method so tokens
+  // are not counted twice.
+  const primaryChannel = openClawPrimaryChannel(request.method);
 
   if (options.mode === "cli") {
     const result = await callOpenClawCli(
@@ -471,8 +475,9 @@ async function* streamOpenClaw(
 
   const queue = createAsyncQueue<AdapterStreamEvent>();
   void callOpenClawGatewayWithEvents(method, params, options, timeoutMs, context.signal, (event) => {
+    if (openClawEventIsOtherChannel(event, primaryChannel)) return;
     queue.push(openClawEventToStreamEvent(event));
-  }).then((result) => {
+  }, true, primaryChannel).then((result) => {
     queue.push({
       type: "result",
       data: toJsonValue(result.payload)
@@ -638,7 +643,9 @@ async function callOpenClawGatewayWithEvents(
   options: OpenClawAdapterOptions,
   timeoutMs: number,
   signal?: AbortSignal,
-  onEvent?: (event: OpenClawGatewayEvent) => void
+  onEvent?: (event: OpenClawGatewayEvent) => void,
+  streaming?: boolean,
+  primaryChannel?: "chat" | "agent"
 ): Promise<{ payload: unknown; events: OpenClawGatewayEvent[] }> {
   const WebSocketCtor = globalThis.WebSocket as unknown as WebSocketConstructor | undefined;
   if (!WebSocketCtor) {
@@ -782,8 +789,19 @@ async function callOpenClawGatewayWithEvents(
     const hello = await sendRequest("connect", connect.params);
     await storeOpenClawDeviceAuthFromHello(options, connect, hello);
     connected = true;
+    const ackPayload = await sendRequest(method, params);
+    if (streaming) {
+      await collectStreamingEvents({
+        runId: readPayloadString(toJsonValue(ackPayload), "runId"),
+        primaryChannel,
+        events,
+        isClosed: () => closed,
+        isAborted: () => Boolean(signal?.aborted),
+        overallDeadline: Date.now() + timeoutMs
+      });
+    }
     return {
-      payload: await sendRequest(method, params),
+      payload: ackPayload,
       events
     };
   } catch (error) {
@@ -1208,6 +1226,113 @@ function delayReject(ms: number, message: string): Promise<never> {
   });
 }
 
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+const OPENCLAW_TERMINAL_STATUSES = new Set([
+  "completed", "complete", "finished", "done", "succeeded", "success",
+  "error", "failed", "cancelled", "canceled", "aborted", "stopped"
+]);
+
+function openClawPrimaryChannel(requestMethod: string): "chat" | "agent" | undefined {
+  if (requestMethod.startsWith("chat")) return "chat";
+  if (requestMethod.startsWith("agent")) return "agent";
+  return undefined;
+}
+
+/**
+ * True when this event belongs to the conversational channel we are NOT
+ * consuming for this call (chat vs agent), so its duplicate tokens are dropped.
+ */
+function openClawEventIsOtherChannel(
+  event: OpenClawGatewayEvent,
+  primaryChannel: "chat" | "agent" | undefined
+): boolean {
+  if (!primaryChannel) return false;
+  const name = event.event;
+  if (name !== "chat" && name !== "agent") return false;
+  return name !== primaryChannel;
+}
+
+function openClawEventRunId(event: OpenClawGatewayEvent): string | undefined {
+  const payload = event.payload;
+  if (!isJsonObject(payload)) return undefined;
+  for (const key of ["runId", "run_id", "id", "taskId"]) {
+    const value = payload[key];
+    if (typeof value === "string" && value.trim() !== "") return value;
+  }
+  return undefined;
+}
+
+function isOpenClawTerminalEvent(event: OpenClawGatewayEvent): boolean {
+  const name = event.event.toLowerCase();
+  // Ignore infrastructure heartbeats that are unrelated to a run turn.
+  if (name === "health" || name === "tick" || name === "presence" || name.startsWith("channel")) return false;
+  const payload = event.payload;
+  if (isJsonObject(payload)) {
+    // chat.stream: a `state:"final"` (or error/abort) frame ends the turn.
+    if (typeof payload.state === "string") {
+      const state = payload.state.toLowerCase();
+      if (state === "final" || state === "completed" || state === "error" || state === "aborted" || state === "cancelled") {
+        return true;
+      }
+    }
+    // agent(.stream): the run ends with a `data.phase:"end"` frame.
+    if (isJsonObject(payload.data) && typeof payload.data.phase === "string") {
+      const phase = payload.data.phase.toLowerCase();
+      if (phase === "end" || phase === "error" || phase === "aborted") return true;
+    }
+    const status = payload.status;
+    if (typeof status === "string" && OPENCLAW_TERMINAL_STATUSES.has(status.toLowerCase())) return true;
+    if (payload.done === true || payload.final === true) return true;
+  }
+  if (/(complete|finish|done|stopped|aborted|cancel|failed)/.test(name)) return true;
+  return false;
+}
+
+/**
+ * OpenClaw's agent/chat turns are asynchronous: the RPC returns a run handle
+ * ({status:"accepted"|"started"}) and the actual token/text events arrive on the
+ * session event stream afterward. For streaming calls we keep the socket open
+ * after the ack and keep collecting events until a terminal event for our run,
+ * an idle gap once text has started, or the overall deadline.
+ */
+async function collectStreamingEvents(ctx: {
+  runId?: string;
+  primaryChannel?: "chat" | "agent";
+  events: OpenClawGatewayEvent[];
+  isClosed: () => boolean;
+  isAborted: () => boolean;
+  overallDeadline: number;
+}): Promise<void> {
+  // Idle is measured from the last TEXT token, not the last event: the gateway
+  // emits `health`/`tick` heartbeats continuously, so keying idle off any event
+  // would never let the turn finish once the model stopped producing tokens.
+  const idleMs = 2_500;
+  const pollMs = 120;
+  let cursor = ctx.events.length;
+  let lastTextAt = 0;
+
+  while (true) {
+    if (ctx.isClosed() || ctx.isAborted()) return;
+    if (Date.now() > ctx.overallDeadline) return;
+
+    for (; cursor < ctx.events.length; cursor += 1) {
+      const event = ctx.events[cursor];
+      if (openClawEventIsOtherChannel(event, ctx.primaryChannel)) continue;
+      const eventRunId = openClawEventRunId(event);
+      // If both ids are known and differ, this event belongs to another run.
+      if (ctx.runId && eventRunId && eventRunId !== ctx.runId) continue;
+      if (extractOpenClawText(event.payload ?? null)) lastTextAt = Date.now();
+      if (isOpenClawTerminalEvent(event)) return;
+    }
+
+    if (lastTextAt > 0 && Date.now() - lastTextAt > idleMs) return;
+    await delay(pollMs);
+  }
+}
+
 async function loadOpenClawDeviceAuth(
   storePath: string | undefined,
   deviceId: string,
@@ -1415,7 +1540,16 @@ function extractOpenClawText(value: JsonValue): string | undefined {
   if (typeof value === "string") return value;
   if (!isJsonObject(value)) return undefined;
 
-  for (const key of ["delta", "text", "content", "message"]) {
+  // chat.stream delta events carry the incremental token in `deltaText`.
+  if (typeof value.deltaText === "string" && value.deltaText.length > 0) return value.deltaText;
+
+  // agent(.stream) events nest the increment under `data.delta` (data.text is
+  // the cumulative buffer — using it would duplicate every token).
+  if (isJsonObject(value.data) && typeof value.data.delta === "string" && value.data.delta.length > 0) {
+    return value.data.delta;
+  }
+
+  for (const key of ["delta", "text", "content"]) {
     const entry = value[key];
     if (typeof entry === "string" && entry.length > 0) return entry;
   }

@@ -31,21 +31,22 @@ const EXAMPLE_PLAN = JSON.stringify(
       {
         id: "generate",
         runtime: "openclaw",
-        method: "agent",
+        method: "chat.stream",
         stream: true,
         params: {
           sessionKey: "uab_demo",
-          prompt: "In exactly 3 sentences, explain what a multi-agent bridge does and why it matters."
+          message: "In exactly 3 sentences, explain what a multi-agent bridge does and why it matters."
         }
       },
       {
         id: "review",
         runtime: "openclaw",
-        streamFrom: ["generate"],
-        method: "agent",
+        dependsOn: ["generate"],
+        method: "chat.stream",
+        stream: true,
         params: {
           sessionKey: "uab_review",
-          prompt: "Rate the clarity of the following text 1–10 and explain your score in one sentence:\n\n${steps.generate.stream.text}"
+          message: "Rate the clarity of this text 1-10 with one sentence why:\n\n${steps.generate.stream.text}"
         }
       }
     ]
