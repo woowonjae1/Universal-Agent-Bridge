@@ -1,0 +1,31 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "UAB API Server",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["packages/cli/dist/index.js", "serve", "--port", "8787"],
+      "port": 8787,
+      "autoPort": false
+    },
+    {
+      "name": "Dashboard (Vite)",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--workspace", "@uab/dashboard", "run", "dev"],
+      "port": 5173,
+      "autoPort": false
+    },
+    {
+      "name": "Example: HTTP Agent",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["examples/http-agent/server.mjs"],
+      "port": 9000
+    },
+    {
+      "name": "Example: A2A Agent",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["examples/a2a-agent/server.mjs"],
+      "port": 9010
+    }
+  ]
+}
