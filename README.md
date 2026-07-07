@@ -1,8 +1,18 @@
 # Universal Agent Bridge
 
-Transport-agnostic control plane for managing multiple AI agent runtimes through one unified RPC protocol.
+**One control plane to orchestrate and govern every MCP server, A2A agent, and custom runtime — behind a single protocol.**
 
-Different agent runtimes (OpenClaw, Hermes, A2A agents, MCP tool servers, any HTTP JSON-RPC agent) expose different APIs for sessions, models, memory, artifacts, and system controls. Universal Agent Bridge puts a small, stable core in front of them: clients speak one protocol, and each runtime keeps its own implementation behind an adapter. Instead of every client wiring to every runtime (N x M), everyone meets at the bridge (N+M).
+Your team already runs more than one agent system: a few MCP tool servers, an A2A agent or two, maybe OpenClaw or Hermes, plus your own HTTP agents. Each speaks a different API for sessions, models, memory, artifacts, and controls — and there is no unified way to route across them, orchestrate a multi-step workflow that spans them, or govern them (auth, limits, audit, health) in one place.
+
+Universal Agent Bridge is that layer. Register each runtime as an adapter; clients speak one protocol; the bridge handles routing, DAG orchestration with streaming handoff, and cross-cutting governance. Instead of every client wiring to every runtime (N × M), everyone meets at the bridge (N + M).
+
+See it in 30 seconds — no keys, no external services:
+
+```bash
+npm install && npm run demo
+```
+
+This runs a three-runtime pipeline (a streaming writer → a reviewer → a formatter) in one DAG. See [examples/multi-agent-pipeline](examples/multi-agent-pipeline/).
 
 ## Positioning
 
