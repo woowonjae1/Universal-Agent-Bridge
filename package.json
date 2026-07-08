@@ -16,6 +16,7 @@
     "dashboard": "npm --workspace @uab/dashboard run dev",
     "dashboard:build": "npm --workspace @uab/dashboard run build",
     "demo": "npm run build:packages && node examples/multi-agent-pipeline/demo.mjs",
+    "demo:zero": "node examples/zero-config-demo.mjs",
     "dev:api": "node packages/cli/dist/index.js serve --port 8787",
     "example:a2a": "node examples/a2a-agent/server.mjs",
     "example:agent": "node examples/http-agent/server.mjs",

@@ -6,6 +6,8 @@ import {
   createOpenClawAdapter,
   type OpenClawDeviceIdentityOptions
 } from "@uab/adapter-openclaw";
+import { createPiAdapter } from "@uab/adapter-pi";
+import { createHostAdapter } from "@uab/adapter-host";
 import { AgentBridge } from "@uab/core";
 import { createMcpAdapter, readMcpServerConfigsFromEnv } from "@uab/mcp";
 import { createHttpBridgeServer, listen } from "@uab/transport-http";
@@ -45,8 +47,10 @@ function createBridge(): AgentBridge {
   registerHttpRuntimeFromEnv(bridge);
   registerHermesRuntimeFromEnv(bridge);
   registerOpenClawRuntimeFromEnv(bridge);
+  registerPiRuntimeFromEnv(bridge);
   registerMcpRuntimeFromEnv(bridge);
   registerA2aRuntimeFromEnv(bridge);
+  bridge.register(createHostAdapter());
   return bridge;
 }
 
@@ -139,6 +143,27 @@ function registerOpenClawRuntimeFromEnv(bridge: AgentBridge): void {
       cliCommand: process.env.UAB_OPENCLAW_CLI,
       scopes: readCsvEnv("UAB_OPENCLAW_SCOPES"),
       timeoutMs: readEnvNumber("UAB_OPENCLAW_TIMEOUT_MS", 30_000)
+    })
+  );
+}
+
+function registerPiRuntimeFromEnv(bridge: AgentBridge): void {
+  const piPath = process.env.UAB_PI_PATH ?? "D:\\code\\pi\\pi_woowonjae";
+  const piCommand = process.env.UAB_PI_COMMAND;
+  const piArgsText = process.env.UAB_PI_ARGS;
+  const enabled = process.env.UAB_PI_ENABLED === "1" || process.env.UAB_PI_PATH || process.env.UAB_PI_COMMAND;
+  if (!enabled) return;
+
+  const piArgs = piArgsText ? piArgsText.split(",").map((a) => a.trim()).filter(Boolean) : undefined;
+
+  bridge.register(
+    createPiAdapter({
+      id: process.env.UAB_PI_RUNTIME_ID ?? "pi",
+      name: process.env.UAB_PI_RUNTIME_NAME ?? "Pi Coding Agent",
+      piPath,
+      command: piCommand,
+      args: piArgs,
+      timeoutMs: readEnvNumber("UAB_PI_TIMEOUT_MS", 30_000)
     })
   );
 }
@@ -326,6 +351,9 @@ MCP HTTP server:
 
 A2A agent:
   UAB_A2A_AGENT_URL=http://127.0.0.1:9010 uab serve
+
+Pi Coding Agent:
+  UAB_PI_ENABLED=1 UAB_PI_PATH=D:\code\pi\pi_woowonjae uab serve
 `);
 }
 

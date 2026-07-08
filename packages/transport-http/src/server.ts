@@ -167,6 +167,18 @@ export function createHttpBridgeServer(options: HttpBridgeServerOptions): Server
         return;
       }
 
+      if (request.method === "POST" && url.pathname === "/plans/run-template") {
+        const payload = await readJsonBody(request, maxBodyBytes);
+        if (!payload || typeof payload !== "object") {
+          throw new Error("Invalid request body for run-template.");
+        }
+        const { plan, variables } = payload as any;
+        if (!plan) throw new Error("Missing 'plan' field.");
+        const instantiated = options.bridge.instantiatePlan(readPlan(plan), variables ?? {});
+        sendJson(response, 200, await options.bridge.runPlan(instantiated));
+        return;
+      }
+
       if (url.pathname.startsWith("/plans/")) {
         const path = url.pathname.slice("/plans/".length);
         const [encodedRunId, action] = path.split("/");

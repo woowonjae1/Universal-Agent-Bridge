@@ -19,6 +19,7 @@ export interface RuntimeMethodDefinition {
   capability?: string;
   risk?: "read" | "write" | "admin";
   paramsExample?: JsonValue;
+  paramsSchema?: JsonValue;
 }
 
 export interface RuntimeInfo {

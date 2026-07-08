@@ -23,6 +23,8 @@
     "@uab/adapter-hermes": "file:../adapter-hermes",
     "@uab/adapter-http-jsonrpc": "file:../adapter-http-jsonrpc",
     "@uab/adapter-openclaw": "file:../adapter-openclaw",
+    "@uab/adapter-pi": "file:../adapter-pi",
+    "@uab/adapter-host": "file:../adapter-host",
     "@uab/core": "file:../core",
     "@uab/mcp": "file:../mcp",
     "@uab/protocol": "file:../protocol",

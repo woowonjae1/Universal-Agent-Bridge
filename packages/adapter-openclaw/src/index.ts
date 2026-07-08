@@ -148,7 +148,15 @@ const DEFAULT_METHODS: RuntimeMethodDefinition[] = [
     description: "Start an OpenClaw agent request.",
     capability: "agent",
     risk: "write",
-    paramsExample: { message: "Summarize this workspace", sessionKey: "default" }
+    paramsExample: { message: "Summarize this workspace", sessionKey: "default" },
+    paramsSchema: {
+      type: "object",
+      properties: {
+        message: { type: "string", description: "发送给智能体的消息内容" },
+        sessionKey: { type: "string", description: "会话标识" }
+      },
+      required: ["message"]
+    }
   },
   {
     name: "agent.wait",
@@ -164,7 +172,15 @@ const DEFAULT_METHODS: RuntimeMethodDefinition[] = [
     description: "Start an OpenClaw agent request and forward Gateway events.",
     capability: "agent",
     risk: "write",
-    paramsExample: { message: "Summarize this workspace", sessionKey: "default" }
+    paramsExample: { message: "Summarize this workspace", sessionKey: "default" },
+    paramsSchema: {
+      type: "object",
+      properties: {
+        message: { type: "string", description: "发送给智能体的消息内容，采用流式增量回复" },
+        sessionKey: { type: "string", description: "会话标识" }
+      },
+      required: ["message"]
+    }
   },
   {
     name: "chat.history",

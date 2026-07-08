@@ -24,6 +24,8 @@
       "@uab/adapter-http-jsonrpc": ["packages/adapter-http-jsonrpc/src/index.ts"],
       "@uab/adapter-hermes": ["packages/adapter-hermes/src/index.ts"],
       "@uab/adapter-openclaw": ["packages/adapter-openclaw/src/index.ts"],
+      "@uab/adapter-pi": ["packages/adapter-pi/src/index.ts"],
+      "@uab/adapter-host": ["packages/adapter-host/src/index.ts"],
       "@uab/transport-http": ["packages/transport-http/src/index.ts"]
     }
   }

@@ -1,0 +1,1615 @@
+{
+  "version": 1,
+  "sessions": [],
+  "audit": [
+    {
+      "id": "audit_mraf9m9g_tyuh3u",
+      "requestId": "xrt2_1783415026_summarize",
+      "traceId": "trace_xrt2_1783415026.summarize",
+      "runtime": "http-agent",
+      "method": "system.ping",
+      "status": "success",
+      "durationMs": 6,
+      "timestamp": "2026-07-07T09:03:57.940Z"
+    },
+    {
+      "id": "audit_mraf9m99_7nnfh6",
+      "requestId": "xrt2_1783415026_relay",
+      "traceId": "trace_xrt2_1783415026.relay",
+      "runtime": "a2a",
+      "method": "a2a.message.send",
+      "status": "success",
+      "durationMs": 4,
+      "timestamp": "2026-07-07T09:03:57.933Z"
+    },
+    {
+      "id": "audit_mraf9m93_9asjlc",
+      "requestId": "xrt2_1783415026_generate",
+      "traceId": "trace_xrt2_1783415026.generate",
+      "runtime": "openclaw",
+      "method": "chat.stream",
+      "status": "success",
+      "durationMs": 11156,
+      "timestamp": "2026-07-07T09:03:57.927Z"
+    },
+    {
+      "id": "audit_mraf8rqk_pg8ia3",
+      "requestId": "xrt_1783414986_relay",
+      "traceId": "trace_xrt_1783414986.relay",
+      "runtime": "a2a",
+      "method": "a2a.message.send",
+      "status": "success",
+      "durationMs": 12,
+      "timestamp": "2026-07-07T09:03:18.380Z"
+    },
+    {
+      "id": "audit_mraf8rq6_vyosvl",
+      "requestId": "xrt_1783414986_generate",
+      "traceId": "trace_xrt_1783414986.generate",
+      "runtime": "openclaw",
+      "method": "chat.stream",
+      "status": "success",
+      "durationMs": 12102,
+      "timestamp": "2026-07-07T09:03:18.366Z"
+    },
+    {
+      "id": "audit_mraeyrln_uocz3p",
+      "requestId": "now_1783414503_review",
+      "traceId": "trace_now_1783414503.review",
+      "runtime": "openclaw",
+      "method": "chat.stream",
+      "status": "success",
+      "durationMs": 14146,
+      "timestamp": "2026-07-07T08:55:31.643Z"
+    },
+    {
+      "id": "audit_mraeygoo_l166yw",
+      "requestId": "now_1783414503_generate",
+      "traceId": "trace_now_1783414503.generate",
+      "runtime": "openclaw",
+      "method": "chat.stream",
+      "status": "success",
+      "durationMs": 13903,
+      "timestamp": "2026-07-07T08:55:17.496Z"
+    },
+    {
+      "id": "audit_mraej4vy_f8ujzt",
+      "requestId": "rel_1783413773_2_review",
+      "traceId": "trace_rel_1783413773_2.review",
+      "runtime": "openclaw",
+      "method": "chat.stream",
+      "status": "success",
+      "durationMs": 14359,
+      "timestamp": "2026-07-07T08:43:22.366Z"
+    },
+    {
+      "id": "audit_mraeitt2_1mhkog",
+      "requestId": "rel_1783413773_2_generate",
+      "traceId": "trace_rel_1783413773_2.generate",
+      "runtime": "openclaw",
+      "method": "chat.stream",
+      "status": "success",
+      "durationMs": 14367,
+      "timestamp": "2026-07-07T08:43:08.006Z"
+    },
+    {
+      "id": "audit_mraeih5k_rsof4c",
+      "requestId": "rel_1783413747_1_review",
+      "traceId": "trace_rel_1783413747_1.review",
+      "runtime": "openclaw",
+      "method": "chat.stream",
+      "status": "success",
+      "durationMs": 11500,
+      "timestamp": "2026-07-07T08:42:51.608Z"
+    },
+    {
+      "id": "audit_mraei8a3_4z3fe4",
+      "requestId": "rel_1783413747_1_generate",
+      "traceId": "trace_rel_1783413747_1.generate",
+      "runtime": "openclaw",
+      "method": "chat.stream",
+      "status": "success",
+      "durationMs": 12066,
+      "timestamp": "2026-07-07T08:42:40.107Z"
+    },
+    {
+      "id": "audit_mraecxed_kp036m",
+      "requestId": "retry_1783413482_gen",
+      "traceId": "trace_retry_1783413482.gen",
+      "runtime": "openclaw",
+      "method": "chat.stream",
+      "status": "success",
+      "durationMs": 30139,
+      "timestamp": "2026-07-07T08:38:32.725Z"
+    },
+    {
+      "id": "audit_mraebaaw_cmukdi",
+      "requestId": "final_1783413405_generate",
+      "traceId": "trace_final_1783413405.generate",
+      "runtime": "openclaw",
+      "method": "chat.stream",
+      "status": "success",
+      "durationMs": 30073,
+      "timestamp": "2026-07-07T08:37:16.136Z"
+    },
+    {
+      "id": "audit_mrae6267_60ew1z",
+      "requestId": "live_1783413168_review",
+      "traceId": "trace_live_1783413168.review",
+      "runtime": "openclaw",
+      "method": "chat.stream",
+      "status": "success",
+      "durationMs": 11243,
+      "timestamp": "2026-07-07T08:33:12.319Z"
+    },
+    {
+      "id": "audit_mrae5thv_2o6k9i",
+      "requestId": "live_1783413168_generate",
+      "traceId": "trace_live_1783413168.generate",
+      "runtime": "openclaw",
+      "method": "chat.stream",
+      "status": "success",
+      "durationMs": 12717,
+      "timestamp": "2026-07-07T08:33:01.075Z"
+    },
+    {
+      "id": "audit_mrae3s6j_ofxpmw",
+      "requestId": "streaming_pipeline_mrae38ti_review",
+      "traceId": "trace_streaming_pipeline_mrae38ti.review",
+      "runtime": "openclaw",
+      "method": "chat.stream",
+      "status": "success",
+      "durationMs": 11955,
+      "timestamp": "2026-07-07T08:31:26.059Z"
+    },
+    {
+      "id": "audit_mrae3iyf_w5jd0y",
+      "requestId": "streaming_pipeline_mrae38ti_generate",
+      "traceId": "trace_streaming_pipeline_mrae38ti.generate",
+      "runtime": "openclaw",
+      "method": "chat.stream",
+      "status": "success",
+      "durationMs": 13121,
+      "timestamp": "2026-07-07T08:31:14.103Z"
+    },
+    {
+      "id": "audit_mrady4o8_u3lydc",
+      "requestId": "disco2_gen",
+      "traceId": "trace_disco2.gen",
+      "runtime": "openclaw",
+      "method": "chat.stream",
+      "status": "success",
+      "durationMs": 30081,
+      "timestamp": "2026-07-07T08:27:02.312Z"
+    },
+    {
+      "id": "audit_mradvb3q_6q0wh6",
+      "requestId": "disco_gen",
+      "traceId": "trace_disco.gen",
+      "runtime": "openclaw",
+      "method": "chat.stream",
+      "status": "success",
+      "durationMs": 30141,
+      "timestamp": "2026-07-07T08:24:50.678Z"
+    },
+    {
+      "id": "audit_mradijtq_p02rd7",
+      "requestId": "run_diag_stream_bridge",
+      "traceId": "trace_run_diag_stream",
+      "runtime": "openclaw",
+      "method": "chat.stream",
+      "status": "success",
+      "durationMs": 479,
+      "source": "ag-ui",
+      "timestamp": "2026-07-07T08:14:55.454Z"
+    },
+    {
+      "id": "audit_mradhqcs_va53ad",
+      "requestId": "chat_stream_test_gen",
+      "traceId": "trace_chat_stream_test.gen",
+      "runtime": "openclaw",
+      "method": "chat.stream",
+      "status": "success",
+      "durationMs": 666,
+      "timestamp": "2026-07-07T08:14:17.260Z"
+    },
+    {
+      "id": "audit_mradf456_2gddp4",
+      "requestId": "stream_test_generate",
+      "traceId": "trace_stream_test.generate",
+      "runtime": "openclaw",
+      "method": "agent.stream",
+      "status": "success",
+      "durationMs": 399,
+      "timestamp": "2026-07-07T08:12:15.162Z"
+    },
+    {
+      "id": "audit_mradbzwl_6mwrjd",
+      "requestId": "streaming_pipeline_generate",
+      "traceId": "trace_streaming_pipeline.generate",
+      "runtime": "openclaw",
+      "method": "agent",
+      "status": "success",
+      "durationMs": 1385,
+      "timestamp": "2026-07-07T08:09:49.701Z"
+    }
+  ],
+  "resources": [],
+  "planRuns": [
+    {
+      "id": "xrt2_1783415026",
+      "planId": "xrt2_1783415026",
+      "traceId": "trace_xrt2_1783415026",
+      "status": "succeeded",
+      "plan": {
+        "id": "xrt2_1783415026",
+        "mode": "dag",
+        "timeoutMs": 60000,
+        "stopOnError": true,
+        "steps": [
+          {
+            "id": "generate",
+            "runtime": "openclaw",
+            "method": "chat.stream",
+            "stream": true,
+            "params": {
+              "sessionKey": "uab_demo",
+              "message": "In one sentence, what is a multi-agent bridge?"
+            }
+          },
+          {
+            "id": "relay",
+            "runtime": "a2a",
+            "dependsOn": [
+              "generate"
+            ],
+            "method": "a2a.message.send",
+            "params": {
+              "text": "${steps.generate.stream.text}"
+            }
+          },
+          {
+            "id": "summarize",
+            "runtime": "http-agent",
+            "dependsOn": [
+              "relay"
+            ],
+            "method": "system.ping",
+            "params": {
+              "message": "a2a echoed: ${steps.relay.result.result.message.parts[0].text}"
+            }
+          }
+        ]
+      },
+      "createdAt": "2026-07-07T09:03:46.770Z",
+      "updatedAt": "2026-07-07T09:03:57.941Z",
+      "startedAt": "2026-07-07T09:03:46.771Z",
+      "completedAt": "2026-07-07T09:03:57.941Z",
+      "steps": [
+        {
+          "stepId": "generate",
+          "index": 0,
+          "status": "success",
+          "method": "chat.stream",
+          "dependsOn": [],
+          "traceId": "trace_xrt2_1783415026.generate",
+          "requestId": "xrt2_1783415026_generate",
+          "startedAt": "2026-07-07T09:03:46.771Z",
+          "streamText": "A multi-agent bridge is an intermediary system that lets independent AI agents discover each other, share context, and coordinate through standardized protocols so they can collaborate on complex tasks instead of working in isolation.",
+          "runtime": "openclaw",
+          "completedAt": "2026-07-07T09:03:57.928Z",
+          "input": {
+            "sessionKey": "uab_demo",
+            "message": "In one sentence, what is a multi-agent bridge?"
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": "xrt2_1783415026_generate",
+            "result": {
+              "runId": "xrt2_1783415026_generate",
+              "status": "started"
+            }
+          }
+        },
+        {
+          "stepId": "relay",
+          "index": 1,
+          "status": "success",
+          "method": "a2a.message.send",
+          "dependsOn": [
+            "generate"
+          ],
+          "traceId": "trace_xrt2_1783415026.relay",
+          "requestId": "xrt2_1783415026_relay",
+          "startedAt": "2026-07-07T09:03:57.929Z",
+          "runtime": "a2a",
+          "completedAt": "2026-07-07T09:03:57.934Z",
+          "input": {
+            "text": "A multi-agent bridge is an intermediary system that lets independent AI agents discover each other, share context, and coordinate through standardized protocols so they can collaborate on complex tasks instead of working in isolation."
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": "xrt2_1783415026_relay",
+            "result": {
+              "agentId": "a2a",
+              "method": "SendMessage",
+              "result": {
+                "message": {
+                  "role": "ROLE_AGENT",
+                  "parts": [
+                    {
+                      "text": "Echo: A multi-agent bridge is an intermediary system that lets independent AI agents discover each other, share context, and coordinate through standardized protocols so they can collaborate on complex tasks instead of working in isolation."
+                    }
+                  ],
+                  "messageId": "reply_mraf9m99",
+                  "taskId": "task_2",
+                  "contextId": "ctx_2"
+                },
+                "task": {
+                  "id": "task_2",
+                  "contextId": "ctx_2",
+                  "status": {
+                    "state": "TASK_STATE_COMPLETED",
+                    "timestamp": "2026-07-07T09:03:57.933Z"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "stepId": "summarize",
+          "index": 2,
+          "status": "success",
+          "method": "system.ping",
+          "dependsOn": [
+            "relay"
+          ],
+          "traceId": "trace_xrt2_1783415026.summarize",
+          "requestId": "xrt2_1783415026_summarize",
+          "startedAt": "2026-07-07T09:03:57.934Z",
+          "runtime": "http-agent",
+          "completedAt": "2026-07-07T09:03:57.941Z",
+          "input": {
+            "message": "a2a echoed: Echo: A multi-agent bridge is an intermediary system that lets independent AI agents discover each other, share context, and coordinate through standardized protocols so they can collaborate on complex tasks instead of working in isolation."
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": "xrt2_1783415026_summarize",
+            "result": {
+              "ok": true,
+              "runtime": "example-http-agent",
+              "echo": {
+                "message": "a2a echoed: Echo: A multi-agent bridge is an intermediary system that lets independent AI agents discover each other, share context, and coordinate through standardized protocols so they can collaborate on complex tasks instead of working in isolation."
+              },
+              "traceId": "trace_xrt2_1783415026.summarize"
+            }
+          }
+        }
+      ],
+      "final": {
+        "jsonrpc": "2.0",
+        "id": "xrt2_1783415026_summarize",
+        "result": {
+          "ok": true,
+          "runtime": "example-http-agent",
+          "echo": {
+            "message": "a2a echoed: Echo: A multi-agent bridge is an intermediary system that lets independent AI agents discover each other, share context, and coordinate through standardized protocols so they can collaborate on complex tasks instead of working in isolation."
+          },
+          "traceId": "trace_xrt2_1783415026.summarize"
+        }
+      }
+    },
+    {
+      "id": "xrt_1783414986",
+      "planId": "xrt_1783414986",
+      "traceId": "trace_xrt_1783414986",
+      "status": "failed",
+      "plan": {
+        "id": "xrt_1783414986",
+        "mode": "dag",
+        "timeoutMs": 60000,
+        "stopOnError": true,
+        "steps": [
+          {
+            "id": "generate",
+            "runtime": "openclaw",
+            "method": "chat.stream",
+            "stream": true,
+            "params": {
+              "sessionKey": "uab_demo",
+              "message": "In one sentence, what is a multi-agent bridge?"
+            }
+          },
+          {
+            "id": "relay",
+            "runtime": "a2a",
+            "dependsOn": [
+              "generate"
+            ],
+            "method": "a2a.message.send",
+            "params": {
+              "text": "${steps.generate.stream.text}"
+            }
+          },
+          {
+            "id": "summarize",
+            "runtime": "http-agent",
+            "dependsOn": [
+              "relay"
+            ],
+            "method": "system.ping",
+            "params": {
+              "message": "relayed via a2a: ${steps.relay.result.message.parts[0].text}"
+            }
+          }
+        ]
+      },
+      "createdAt": "2026-07-07T09:03:06.242Z",
+      "updatedAt": "2026-07-07T09:03:18.381Z",
+      "startedAt": "2026-07-07T09:03:06.262Z",
+      "completedAt": "2026-07-07T09:03:18.381Z",
+      "steps": [
+        {
+          "stepId": "generate",
+          "index": 0,
+          "status": "success",
+          "method": "chat.stream",
+          "dependsOn": [],
+          "traceId": "trace_xrt_1783414986.generate",
+          "requestId": "xrt_1783414986_generate",
+          "startedAt": "2026-07-07T09:03:06.263Z",
+          "streamText": "A multi-agent bridge is an intermediary system that enables independent AI agents — across different models or frameworks — to discover each other, share context, and coordinate actions through standardized protocols so they can collaborate on shared tasks instead of operating in isolation.",
+          "runtime": "openclaw",
+          "completedAt": "2026-07-07T09:03:18.367Z",
+          "input": {
+            "sessionKey": "uab_demo",
+            "message": "In one sentence, what is a multi-agent bridge?"
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": "xrt_1783414986_generate",
+            "result": {
+              "runId": "xrt_1783414986_generate",
+              "status": "started"
+            }
+          }
+        },
+        {
+          "stepId": "relay",
+          "index": 1,
+          "status": "success",
+          "method": "a2a.message.send",
+          "dependsOn": [
+            "generate"
+          ],
+          "traceId": "trace_xrt_1783414986.relay",
+          "requestId": "xrt_1783414986_relay",
+          "startedAt": "2026-07-07T09:03:18.367Z",
+          "runtime": "a2a",
+          "completedAt": "2026-07-07T09:03:18.380Z",
+          "input": {
+            "text": "A multi-agent bridge is an intermediary system that enables independent AI agents — across different models or frameworks — to discover each other, share context, and coordinate actions through standardized protocols so they can collaborate on shared tasks instead of operating in isolation."
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": "xrt_1783414986_relay",
+            "result": {
+              "agentId": "a2a",
+              "method": "SendMessage",
+              "result": {
+                "message": {
+                  "role": "ROLE_AGENT",
+                  "parts": [
+                    {
+                      "text": "Echo: A multi-agent bridge is an intermediary system that enables independent AI agents — across different models or frameworks — to discover each other, share context, and coordinate actions through standardized protocols so they can collaborate on shared tasks instead of operating in isolation."
+                    }
+                  ],
+                  "messageId": "reply_mraf8rqi",
+                  "taskId": "task_1",
+                  "contextId": "ctx_1"
+                },
+                "task": {
+                  "id": "task_1",
+                  "contextId": "ctx_1",
+                  "status": {
+                    "state": "TASK_STATE_COMPLETED",
+                    "timestamp": "2026-07-07T09:03:18.378Z"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "stepId": "summarize",
+          "index": 2,
+          "status": "error",
+          "method": "system.ping",
+          "dependsOn": [
+            "relay"
+          ],
+          "traceId": "trace_xrt_1783414986.summarize",
+          "requestId": "xrt_1783414986_summarize",
+          "startedAt": "2026-07-07T09:03:18.380Z",
+          "completedAt": "2026-07-07T09:03:18.381Z",
+          "response": {
+            "jsonrpc": "2.0",
+            "id": "xrt_1783414986_summarize",
+            "error": {
+              "code": -32600,
+              "message": "Plan template reference 'steps.relay.result.message.parts[0].text' was not found."
+            }
+          }
+        }
+      ],
+      "final": {
+        "jsonrpc": "2.0",
+        "id": "xrt_1783414986_summarize",
+        "error": {
+          "code": -32600,
+          "message": "Plan template reference 'steps.relay.result.message.parts[0].text' was not found."
+        }
+      }
+    },
+    {
+      "id": "now_1783414503",
+      "planId": "now_1783414503",
+      "traceId": "trace_now_1783414503",
+      "status": "succeeded",
+      "plan": {
+        "id": "now_1783414503",
+        "mode": "dag",
+        "timeoutMs": 60000,
+        "stopOnError": true,
+        "steps": [
+          {
+            "id": "generate",
+            "runtime": "openclaw",
+            "method": "chat.stream",
+            "stream": true,
+            "params": {
+              "sessionKey": "uab_demo",
+              "message": "In exactly 2 sentences, what is a multi-agent bridge?"
+            }
+          },
+          {
+            "id": "review",
+            "runtime": "openclaw",
+            "dependsOn": [
+              "generate"
+            ],
+            "method": "chat.stream",
+            "stream": true,
+            "params": {
+              "sessionKey": "uab_review",
+              "message": "Rate clarity 1-10 with one reason:\n\n${steps.generate.stream.text}"
+            }
+          }
+        ]
+      },
+      "createdAt": "2026-07-07T08:55:03.592Z",
+      "updatedAt": "2026-07-07T08:55:31.644Z",
+      "startedAt": "2026-07-07T08:55:03.592Z",
+      "completedAt": "2026-07-07T08:55:31.644Z",
+      "steps": [
+        {
+          "stepId": "generate",
+          "index": 0,
+          "status": "success",
+          "method": "chat.stream",
+          "dependsOn": [],
+          "traceId": "trace_now_1783414503.generate",
+          "requestId": "now_1783414503_generate",
+          "startedAt": "2026-07-07T08:55:03.593Z",
+          "streamText": "A multi-agent bridge is an intermediary layer that lets independent AI agents discover each other, share context, and coordinate actions through standardized protocols; it matters because it transforms isolated, single-purpose models into a collaborative system where specialized agents can combine their strengths for complex, real-world tasks.",
+          "runtime": "openclaw",
+          "completedAt": "2026-07-07T08:55:17.496Z",
+          "input": {
+            "sessionKey": "uab_demo",
+            "message": "In exactly 2 sentences, what is a multi-agent bridge?"
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": "now_1783414503_generate",
+            "result": {
+              "runId": "now_1783414503_generate",
+              "status": "started"
+            }
+          }
+        },
+        {
+          "stepId": "review",
+          "index": 1,
+          "status": "success",
+          "method": "chat.stream",
+          "dependsOn": [
+            "generate"
+          ],
+          "traceId": "trace_now_1783414503.review",
+          "requestId": "now_1783414503_review",
+          "startedAt": "2026-07-07T08:55:17.497Z",
+          "streamText": "9/10 — it's tight, authoritative, and elegantly balances *what* it does with *why* it matters, with no filler or redundancy between clauses.",
+          "runtime": "openclaw",
+          "completedAt": "2026-07-07T08:55:31.643Z",
+          "input": {
+            "sessionKey": "uab_review",
+            "message": "Rate clarity 1-10 with one reason:\n\nA multi-agent bridge is an intermediary layer that lets independent AI agents discover each other, share context, and coordinate actions through standardized protocols; it matters because it transforms isolated, single-purpose models into a collaborative system where specialized agents can combine their strengths for complex, real-world tasks."
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": "now_1783414503_review",
+            "result": {
+              "runId": "now_1783414503_review",
+              "status": "started"
+            }
+          }
+        }
+      ],
+      "final": {
+        "jsonrpc": "2.0",
+        "id": "now_1783414503_review",
+        "result": {
+          "runId": "now_1783414503_review",
+          "status": "started"
+        }
+      }
+    },
+    {
+      "id": "rel_1783413773_2",
+      "planId": "rel_1783413773_2",
+      "traceId": "trace_rel_1783413773_2",
+      "status": "succeeded",
+      "plan": {
+        "id": "rel_1783413773_2",
+        "mode": "dag",
+        "timeoutMs": 60000,
+        "stopOnError": true,
+        "steps": [
+          {
+            "id": "generate",
+            "runtime": "openclaw",
+            "method": "chat.stream",
+            "stream": true,
+            "params": {
+              "sessionKey": "uab_demo",
+              "message": "Name two benefits of a multi-agent bridge in one sentence."
+            }
+          },
+          {
+            "id": "review",
+            "runtime": "openclaw",
+            "dependsOn": [
+              "generate"
+            ],
+            "method": "chat.stream",
+            "stream": true,
+            "params": {
+              "sessionKey": "uab_review",
+              "message": "Rate clarity 1-10 with one reason:\n\n${steps.generate.stream.text}"
+            }
+          }
+        ]
+      },
+      "createdAt": "2026-07-07T08:42:53.639Z",
+      "updatedAt": "2026-07-07T08:43:22.368Z",
+      "startedAt": "2026-07-07T08:42:53.639Z",
+      "completedAt": "2026-07-07T08:43:22.368Z",
+      "steps": [
+        {
+          "stepId": "generate",
+          "index": 0,
+          "status": "success",
+          "method": "chat.stream",
+          "dependsOn": [],
+          "traceId": "trace_rel_1783413773_2.generate",
+          "requestId": "rel_1783413773_2_generate",
+          "startedAt": "2026-07-07T08:42:53.639Z",
+          "streamText": "It breaks down silos so agents across different models or frameworks can communicate, and it enables complex workflows by allowing specialized agents to combine their individual capabilities toward shared goals.",
+          "runtime": "openclaw",
+          "completedAt": "2026-07-07T08:43:08.006Z",
+          "input": {
+            "sessionKey": "uab_demo",
+            "message": "Name two benefits of a multi-agent bridge in one sentence."
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": "rel_1783413773_2_generate",
+            "result": {
+              "runId": "rel_1783413773_2_generate",
+              "status": "started"
+            }
+          }
+        },
+        {
+          "stepId": "review",
+          "index": 1,
+          "status": "success",
+          "method": "chat.stream",
+          "dependsOn": [
+            "generate"
+          ],
+          "traceId": "trace_rel_1783413773_2.review",
+          "requestId": "rel_1783413773_2_review",
+          "startedAt": "2026-07-07T08:43:08.007Z",
+          "streamText": "8/10 — clear two-part structure covering both communication and collaboration, though the phrasing is slightly heavier than the previous versions and repeats the \"shared goals / coordinated workflows\" idea that's already implied by \"combining capabilities.\"",
+          "runtime": "openclaw",
+          "completedAt": "2026-07-07T08:43:22.367Z",
+          "input": {
+            "sessionKey": "uab_review",
+            "message": "Rate clarity 1-10 with one reason:\n\nIt breaks down silos so agents across different models or frameworks can communicate, and it enables complex workflows by allowing specialized agents to combine their individual capabilities toward shared goals."
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": "rel_1783413773_2_review",
+            "result": {
+              "runId": "rel_1783413773_2_review",
+              "status": "started"
+            }
+          }
+        }
+      ],
+      "final": {
+        "jsonrpc": "2.0",
+        "id": "rel_1783413773_2_review",
+        "result": {
+          "runId": "rel_1783413773_2_review",
+          "status": "started"
+        }
+      }
+    },
+    {
+      "id": "rel_1783413747_1",
+      "planId": "rel_1783413747_1",
+      "traceId": "trace_rel_1783413747_1",
+      "status": "succeeded",
+      "plan": {
+        "id": "rel_1783413747_1",
+        "mode": "dag",
+        "timeoutMs": 60000,
+        "stopOnError": true,
+        "steps": [
+          {
+            "id": "generate",
+            "runtime": "openclaw",
+            "method": "chat.stream",
+            "stream": true,
+            "params": {
+              "sessionKey": "uab_demo",
+              "message": "Name two benefits of a multi-agent bridge in one sentence."
+            }
+          },
+          {
+            "id": "review",
+            "runtime": "openclaw",
+            "dependsOn": [
+              "generate"
+            ],
+            "method": "chat.stream",
+            "stream": true,
+            "params": {
+              "sessionKey": "uab_review",
+              "message": "Rate clarity 1-10 with one reason:\n\n${steps.generate.stream.text}"
+            }
+          }
+        ]
+      },
+      "createdAt": "2026-07-07T08:42:28.026Z",
+      "updatedAt": "2026-07-07T08:42:51.609Z",
+      "startedAt": "2026-07-07T08:42:28.039Z",
+      "completedAt": "2026-07-07T08:42:51.609Z",
+      "steps": [
+        {
+          "stepId": "generate",
+          "index": 0,
+          "status": "success",
+          "method": "chat.stream",
+          "dependsOn": [],
+          "traceId": "trace_rel_1783413747_1.generate",
+          "requestId": "rel_1783413747_1_generate",
+          "startedAt": "2026-07-07T08:42:28.040Z",
+          "streamText": "It enables specialized AI agents to collaborate on shared tasks and breaks down silos so independent capabilities can combine into complex, coordinated workflows.",
+          "runtime": "openclaw",
+          "completedAt": "2026-07-07T08:42:40.108Z",
+          "input": {
+            "sessionKey": "uab_demo",
+            "message": "Name two benefits of a multi-agent bridge in one sentence."
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": "rel_1783413747_1_generate",
+            "result": {
+              "runId": "rel_1783413747_1_generate",
+              "status": "started"
+            }
+          }
+        },
+        {
+          "stepId": "review",
+          "index": 1,
+          "status": "success",
+          "method": "chat.stream",
+          "dependsOn": [
+            "generate"
+          ],
+          "traceId": "trace_rel_1783413747_1.review",
+          "requestId": "rel_1783413747_1_review",
+          "startedAt": "2026-07-07T08:42:40.108Z",
+          "streamText": "9/10 — it's lean, direct, and immediately communicates both *what* it does and *why* it matters, though \"collaborate on shared tasks\" and \"complex, coordinated workflows\" say roughly the same thing, so trimming one would make it even tighter.",
+          "runtime": "openclaw",
+          "completedAt": "2026-07-07T08:42:51.609Z",
+          "input": {
+            "sessionKey": "uab_review",
+            "message": "Rate clarity 1-10 with one reason:\n\nIt enables specialized AI agents to collaborate on shared tasks and breaks down silos so independent capabilities can combine into complex, coordinated workflows."
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": "rel_1783413747_1_review",
+            "result": {
+              "runId": "rel_1783413747_1_review",
+              "status": "started"
+            }
+          }
+        }
+      ],
+      "final": {
+        "jsonrpc": "2.0",
+        "id": "rel_1783413747_1_review",
+        "result": {
+          "runId": "rel_1783413747_1_review",
+          "status": "started"
+        }
+      }
+    },
+    {
+      "id": "retry_1783413482",
+      "planId": "retry_1783413482",
+      "traceId": "trace_retry_1783413482",
+      "status": "succeeded",
+      "plan": {
+        "id": "retry_1783413482",
+        "mode": "dag",
+        "timeoutMs": 60000,
+        "stopOnError": true,
+        "steps": [
+          {
+            "id": "gen",
+            "runtime": "openclaw",
+            "method": "chat.stream",
+            "stream": true,
+            "params": {
+              "sessionKey": "uab_demo",
+              "message": "Say hi in one short sentence."
+            }
+          }
+        ]
+      },
+      "createdAt": "2026-07-07T08:38:02.585Z",
+      "updatedAt": "2026-07-07T08:38:32.726Z",
+      "startedAt": "2026-07-07T08:38:02.586Z",
+      "completedAt": "2026-07-07T08:38:32.726Z",
+      "steps": [
+        {
+          "stepId": "gen",
+          "index": 0,
+          "status": "success",
+          "method": "chat.stream",
+          "dependsOn": [],
+          "traceId": "trace_retry_1783413482.gen",
+          "requestId": "retry_1783413482_gen",
+          "startedAt": "2026-07-07T08:38:02.586Z",
+          "streamText": "It enables specialized AI agents to collaborate on shared tasks and breaks down silos so capabilities can combine into complex, coordinated workflows.",
+          "runtime": "openclaw",
+          "completedAt": "2026-07-07T08:38:32.725Z",
+          "input": {
+            "sessionKey": "uab_demo",
+            "message": "Say hi in one short sentence."
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": "retry_1783413482_gen",
+            "result": {
+              "runId": "retry_1783413482_gen",
+              "status": "started"
+            }
+          }
+        }
+      ],
+      "final": {
+        "jsonrpc": "2.0",
+        "id": "retry_1783413482_gen",
+        "result": {
+          "runId": "retry_1783413482_gen",
+          "status": "started"
+        }
+      }
+    },
+    {
+      "id": "final_1783413405",
+      "planId": "final_1783413405",
+      "traceId": "trace_final_1783413405",
+      "status": "failed",
+      "plan": {
+        "id": "final_1783413405",
+        "mode": "dag",
+        "timeoutMs": 60000,
+        "stopOnError": true,
+        "steps": [
+          {
+            "id": "generate",
+            "runtime": "openclaw",
+            "method": "chat.stream",
+            "stream": true,
+            "params": {
+              "sessionKey": "uab_demo",
+              "message": "Name two benefits of a multi-agent bridge in one sentence."
+            }
+          },
+          {
+            "id": "review",
+            "runtime": "openclaw",
+            "dependsOn": [
+              "generate"
+            ],
+            "method": "chat.stream",
+            "stream": true,
+            "params": {
+              "sessionKey": "uab_review",
+              "message": "Rate clarity 1-10 with one reason:\n\n${steps.generate.stream.text}"
+            }
+          }
+        ]
+      },
+      "createdAt": "2026-07-07T08:36:46.049Z",
+      "updatedAt": "2026-07-07T08:37:16.145Z",
+      "startedAt": "2026-07-07T08:36:46.062Z",
+      "completedAt": "2026-07-07T08:37:16.145Z",
+      "steps": [
+        {
+          "stepId": "generate",
+          "index": 0,
+          "status": "success",
+          "method": "chat.stream",
+          "dependsOn": [],
+          "traceId": "trace_final_1783413405.generate",
+          "requestId": "final_1783413405_generate",
+          "startedAt": "2026-07-07T08:36:46.062Z",
+          "runtime": "openclaw",
+          "completedAt": "2026-07-07T08:37:16.139Z",
+          "input": {
+            "sessionKey": "uab_demo",
+            "message": "Name two benefits of a multi-agent bridge in one sentence."
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": "final_1783413405_generate",
+            "result": {
+              "runId": "final_1783413405_generate",
+              "status": "started"
+            }
+          }
+        },
+        {
+          "stepId": "review",
+          "index": 1,
+          "status": "error",
+          "method": "chat.stream",
+          "dependsOn": [
+            "generate"
+          ],
+          "traceId": "trace_final_1783413405.review",
+          "requestId": "final_1783413405_review",
+          "startedAt": "2026-07-07T08:37:16.140Z",
+          "completedAt": "2026-07-07T08:37:16.144Z",
+          "response": {
+            "jsonrpc": "2.0",
+            "id": "final_1783413405_review",
+            "error": {
+              "code": -32600,
+              "message": "Plan template reference 'steps.generate.stream.text' was not found."
+            }
+          }
+        }
+      ],
+      "final": {
+        "jsonrpc": "2.0",
+        "id": "final_1783413405_review",
+        "error": {
+          "code": -32600,
+          "message": "Plan template reference 'steps.generate.stream.text' was not found."
+        }
+      }
+    },
+    {
+      "id": "live_1783413168",
+      "planId": "live_1783413168",
+      "traceId": "trace_live_1783413168",
+      "status": "succeeded",
+      "plan": {
+        "id": "live_1783413168",
+        "mode": "dag",
+        "timeoutMs": 60000,
+        "stopOnError": true,
+        "steps": [
+          {
+            "id": "generate",
+            "runtime": "openclaw",
+            "method": "chat.stream",
+            "stream": true,
+            "params": {
+              "sessionKey": "uab_demo",
+              "message": "In exactly 3 sentences, explain what a multi-agent bridge does and why it matters."
+            }
+          },
+          {
+            "id": "review",
+            "runtime": "openclaw",
+            "dependsOn": [
+              "generate"
+            ],
+            "method": "chat.stream",
+            "stream": true,
+            "params": {
+              "sessionKey": "uab_review",
+              "message": "Rate the clarity 1-10 with one sentence why:\n\n${steps.generate.stream.text}"
+            }
+          }
+        ]
+      },
+      "createdAt": "2026-07-07T08:32:48.357Z",
+      "updatedAt": "2026-07-07T08:33:12.320Z",
+      "startedAt": "2026-07-07T08:32:48.357Z",
+      "completedAt": "2026-07-07T08:33:12.320Z",
+      "steps": [
+        {
+          "stepId": "generate",
+          "index": 0,
+          "status": "success",
+          "method": "chat.stream",
+          "dependsOn": [],
+          "traceId": "trace_live_1783413168.generate",
+          "requestId": "live_1783413168_generate",
+          "startedAt": "2026-07-07T08:32:48.358Z",
+          "streamText": "A multi-agent bridge connects independent AI agents so they can communicate, share context, and coordinate tasks through standardized interfaces; it matters because it unlocks collaborative workflows where specialized agents combine their strengths rather than working in isolated silos.",
+          "runtime": "openclaw",
+          "completedAt": "2026-07-07T08:33:01.076Z",
+          "input": {
+            "sessionKey": "uab_demo",
+            "message": "In exactly 3 sentences, explain what a multi-agent bridge does and why it matters."
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": "live_1783413168_generate",
+            "result": {
+              "runId": "live_1783413168_generate",
+              "status": "started"
+            }
+          }
+        },
+        {
+          "stepId": "review",
+          "index": 1,
+          "status": "success",
+          "method": "chat.stream",
+          "dependsOn": [
+            "generate"
+          ],
+          "traceId": "trace_live_1783413168.review",
+          "requestId": "live_1783413168_review",
+          "startedAt": "2026-07-07T08:33:01.076Z",
+          "streamText": "8/10 — it's clean, concise, and well-structured with zero filler, though splitting the semicolon into two separate sentences would make it slightly easier to digest on first read.",
+          "runtime": "openclaw",
+          "completedAt": "2026-07-07T08:33:12.320Z",
+          "input": {
+            "sessionKey": "uab_review",
+            "message": "Rate the clarity 1-10 with one sentence why:\n\nA multi-agent bridge connects independent AI agents so they can communicate, share context, and coordinate tasks through standardized interfaces; it matters because it unlocks collaborative workflows where specialized agents combine their strengths rather than working in isolated silos."
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": "live_1783413168_review",
+            "result": {
+              "runId": "live_1783413168_review",
+              "status": "started"
+            }
+          }
+        }
+      ],
+      "final": {
+        "jsonrpc": "2.0",
+        "id": "live_1783413168_review",
+        "result": {
+          "runId": "live_1783413168_review",
+          "status": "started"
+        }
+      }
+    },
+    {
+      "id": "streaming_pipeline_mrae38ti",
+      "planId": "streaming_pipeline",
+      "traceId": "trace_streaming_pipeline_mrae38ti",
+      "status": "succeeded",
+      "plan": {
+        "id": "streaming_pipeline",
+        "mode": "dag",
+        "timeoutMs": 60000,
+        "stopOnError": true,
+        "steps": [
+          {
+            "id": "generate",
+            "runtime": "openclaw",
+            "method": "chat.stream",
+            "stream": true,
+            "params": {
+              "sessionKey": "uab_demo",
+              "message": "In exactly 3 sentences, explain what a multi-agent bridge does and why it matters."
+            }
+          },
+          {
+            "id": "review",
+            "runtime": "openclaw",
+            "dependsOn": [
+              "generate"
+            ],
+            "method": "chat.stream",
+            "stream": true,
+            "params": {
+              "sessionKey": "uab_review",
+              "message": "Rate the clarity of this text 1-10 with one sentence why:\n\n${steps.generate.stream.text}"
+            }
+          }
+        ]
+      },
+      "createdAt": "2026-07-07T08:31:00.966Z",
+      "updatedAt": "2026-07-07T08:31:26.059Z",
+      "startedAt": "2026-07-07T08:31:00.980Z",
+      "completedAt": "2026-07-07T08:31:26.059Z",
+      "steps": [
+        {
+          "stepId": "generate",
+          "index": 0,
+          "status": "success",
+          "method": "chat.stream",
+          "dependsOn": [],
+          "traceId": "trace_streaming_pipeline_mrae38ti.generate",
+          "requestId": "streaming_pipeline_mrae38ti_generate",
+          "startedAt": "2026-07-07T08:31:00.980Z",
+          "streamText": "I've actually already answered this a few times — but here's my explanation anyway: a multi-agent bridge enables distinct AI agents (often built on different models or frameworks) to discover each other, exchange information, and coordinate through standardized protocols; it matters because without it, agents operate in isolation, preventing collaborative workflows that require specialized agents to work together; ultimately, it transforms independent AI capabilities into a cohesive, interoperable ecosystem.",
+          "runtime": "openclaw",
+          "completedAt": "2026-07-07T08:31:14.103Z",
+          "input": {
+            "sessionKey": "uab_demo",
+            "message": "In exactly 3 sentences, explain what a multi-agent bridge does and why it matters."
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": "streaming_pipeline_mrae38ti_generate",
+            "result": {
+              "runId": "streaming_pipeline_mrae38ti_generate",
+              "status": "started"
+            }
+          }
+        },
+        {
+          "stepId": "review",
+          "index": 1,
+          "status": "success",
+          "method": "chat.stream",
+          "dependsOn": [
+            "generate"
+          ],
+          "traceId": "trace_streaming_pipeline_mrae38ti.review",
+          "requestId": "streaming_pipeline_mrae38ti_review",
+          "startedAt": "2026-07-07T08:31:14.104Z",
+          "streamText": "6/10 — it's technically accurate and covers all the key concepts, but the self-referential opener (\"I've actually already answered this a few times\") is distracting noise, and packing each idea into a massive semicolon-chained sentence makes it harder to parse than necessary.",
+          "runtime": "openclaw",
+          "completedAt": "2026-07-07T08:31:26.059Z",
+          "input": {
+            "sessionKey": "uab_review",
+            "message": "Rate the clarity of this text 1-10 with one sentence why:\n\nI've actually already answered this a few times — but here's my explanation anyway: a multi-agent bridge enables distinct AI agents (often built on different models or frameworks) to discover each other, exchange information, and coordinate through standardized protocols; it matters because without it, agents operate in isolation, preventing collaborative workflows that require specialized agents to work together; ultimately, it transforms independent AI capabilities into a cohesive, interoperable ecosystem."
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": "streaming_pipeline_mrae38ti_review",
+            "result": {
+              "runId": "streaming_pipeline_mrae38ti_review",
+              "status": "started"
+            }
+          }
+        }
+      ],
+      "final": {
+        "jsonrpc": "2.0",
+        "id": "streaming_pipeline_mrae38ti_review",
+        "result": {
+          "runId": "streaming_pipeline_mrae38ti_review",
+          "status": "started"
+        }
+      }
+    },
+    {
+      "id": "disco2",
+      "planId": "disco2",
+      "traceId": "trace_disco2",
+      "status": "succeeded",
+      "plan": {
+        "id": "disco2",
+        "mode": "dag",
+        "timeoutMs": 40000,
+        "stopOnError": true,
+        "steps": [
+          {
+            "id": "gen",
+            "runtime": "openclaw",
+            "method": "chat.stream",
+            "stream": true,
+            "params": {
+              "sessionKey": "uab_demo",
+              "message": "Say hello in exactly one short sentence."
+            }
+          }
+        ]
+      },
+      "createdAt": "2026-07-07T08:26:32.216Z",
+      "updatedAt": "2026-07-07T08:27:02.313Z",
+      "startedAt": "2026-07-07T08:26:32.229Z",
+      "completedAt": "2026-07-07T08:27:02.313Z",
+      "steps": [
+        {
+          "stepId": "gen",
+          "index": 0,
+          "status": "success",
+          "method": "chat.stream",
+          "dependsOn": [],
+          "traceId": "trace_disco2.gen",
+          "requestId": "disco2_gen",
+          "startedAt": "2026-07-07T08:26:32.229Z",
+          "runtime": "openclaw",
+          "completedAt": "2026-07-07T08:27:02.313Z",
+          "input": {
+            "sessionKey": "uab_demo",
+            "message": "Say hello in exactly one short sentence."
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": "disco2_gen",
+            "result": {
+              "runId": "disco2_gen",
+              "status": "started"
+            }
+          }
+        }
+      ],
+      "final": {
+        "jsonrpc": "2.0",
+        "id": "disco2_gen",
+        "result": {
+          "runId": "disco2_gen",
+          "status": "started"
+        }
+      }
+    },
+    {
+      "id": "disco",
+      "planId": "disco",
+      "traceId": "trace_disco",
+      "status": "succeeded",
+      "plan": {
+        "id": "disco",
+        "mode": "dag",
+        "timeoutMs": 40000,
+        "stopOnError": true,
+        "steps": [
+          {
+            "id": "gen",
+            "runtime": "openclaw",
+            "method": "chat.stream",
+            "stream": true,
+            "params": {
+              "sessionKey": "uab_demo",
+              "message": "Say hello in exactly one short sentence."
+            }
+          }
+        ]
+      },
+      "createdAt": "2026-07-07T08:24:20.523Z",
+      "updatedAt": "2026-07-07T08:24:50.679Z",
+      "startedAt": "2026-07-07T08:24:20.535Z",
+      "completedAt": "2026-07-07T08:24:50.679Z",
+      "steps": [
+        {
+          "stepId": "gen",
+          "index": 0,
+          "status": "success",
+          "method": "chat.stream",
+          "dependsOn": [],
+          "traceId": "trace_disco.gen",
+          "requestId": "disco_gen",
+          "startedAt": "2026-07-07T08:24:20.536Z",
+          "runtime": "openclaw",
+          "completedAt": "2026-07-07T08:24:50.679Z",
+          "input": {
+            "sessionKey": "uab_demo",
+            "message": "Say hello in exactly one short sentence."
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": "disco_gen",
+            "result": {
+              "runId": "disco_gen",
+              "status": "started"
+            }
+          }
+        }
+      ],
+      "final": {
+        "jsonrpc": "2.0",
+        "id": "disco_gen",
+        "result": {
+          "runId": "disco_gen",
+          "status": "started"
+        }
+      }
+    },
+    {
+      "id": "chat_stream_test",
+      "planId": "chat_stream_test",
+      "traceId": "trace_chat_stream_test",
+      "status": "succeeded",
+      "plan": {
+        "id": "chat_stream_test",
+        "mode": "dag",
+        "timeoutMs": 60000,
+        "stopOnError": true,
+        "steps": [
+          {
+            "id": "gen",
+            "runtime": "openclaw",
+            "method": "chat.stream",
+            "stream": true,
+            "params": {
+              "sessionKey": "uab_demo",
+              "message": "Say hello in one short sentence."
+            }
+          }
+        ]
+      },
+      "createdAt": "2026-07-07T08:14:16.593Z",
+      "updatedAt": "2026-07-07T08:14:17.260Z",
+      "startedAt": "2026-07-07T08:14:16.594Z",
+      "completedAt": "2026-07-07T08:14:17.260Z",
+      "steps": [
+        {
+          "stepId": "gen",
+          "index": 0,
+          "status": "success",
+          "method": "chat.stream",
+          "dependsOn": [],
+          "traceId": "trace_chat_stream_test.gen",
+          "requestId": "chat_stream_test_gen",
+          "startedAt": "2026-07-07T08:14:16.594Z",
+          "runtime": "openclaw",
+          "completedAt": "2026-07-07T08:14:17.260Z",
+          "input": {
+            "sessionKey": "uab_demo",
+            "message": "Say hello in one short sentence."
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": "chat_stream_test_gen",
+            "result": {
+              "runId": "chat_stream_test_gen",
+              "status": "started"
+            }
+          }
+        }
+      ],
+      "final": {
+        "jsonrpc": "2.0",
+        "id": "chat_stream_test_gen",
+        "result": {
+          "runId": "chat_stream_test_gen",
+          "status": "started"
+        }
+      }
+    },
+    {
+      "id": "stream_test",
+      "planId": "stream_test",
+      "traceId": "trace_stream_test",
+      "status": "failed",
+      "plan": {
+        "id": "stream_test",
+        "mode": "dag",
+        "timeoutMs": 120000,
+        "stopOnError": true,
+        "steps": [
+          {
+            "id": "generate",
+            "runtime": "openclaw",
+            "method": "agent.stream",
+            "stream": true,
+            "params": {
+              "sessionKey": "uab_demo",
+              "message": "In exactly 3 sentences, explain what a multi-agent bridge does and why it matters."
+            }
+          },
+          {
+            "id": "review",
+            "runtime": "openclaw",
+            "dependsOn": [
+              "generate"
+            ],
+            "method": "agent.stream",
+            "stream": true,
+            "params": {
+              "sessionKey": "uab_review",
+              "message": "Rate the clarity of this text 1-10 with one sentence why:\n\n${steps.generate.stream.text}"
+            }
+          }
+        ]
+      },
+      "createdAt": "2026-07-07T08:12:14.746Z",
+      "updatedAt": "2026-07-07T08:12:15.162Z",
+      "startedAt": "2026-07-07T08:12:14.763Z",
+      "completedAt": "2026-07-07T08:12:15.162Z",
+      "steps": [
+        {
+          "stepId": "generate",
+          "index": 0,
+          "status": "success",
+          "method": "agent.stream",
+          "dependsOn": [],
+          "traceId": "trace_stream_test.generate",
+          "requestId": "stream_test_generate",
+          "startedAt": "2026-07-07T08:12:14.763Z",
+          "runtime": "openclaw",
+          "completedAt": "2026-07-07T08:12:15.162Z",
+          "input": {
+            "sessionKey": "uab_demo",
+            "message": "In exactly 3 sentences, explain what a multi-agent bridge does and why it matters."
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": "stream_test_generate",
+            "result": {
+              "runId": "stream_test_generate",
+              "sessionKey": "agent:main:uab_demo",
+              "status": "accepted",
+              "acceptedAt": 1783411935162
+            }
+          }
+        },
+        {
+          "stepId": "review",
+          "index": 1,
+          "status": "error",
+          "method": "agent.stream",
+          "dependsOn": [
+            "generate"
+          ],
+          "traceId": "trace_stream_test.review",
+          "requestId": "stream_test_review",
+          "startedAt": "2026-07-07T08:12:15.162Z",
+          "completedAt": "2026-07-07T08:12:15.162Z",
+          "response": {
+            "jsonrpc": "2.0",
+            "id": "stream_test_review",
+            "error": {
+              "code": -32600,
+              "message": "Plan template reference 'steps.generate.stream.text' was not found."
+            }
+          }
+        }
+      ],
+      "final": {
+        "jsonrpc": "2.0",
+        "id": "stream_test_review",
+        "error": {
+          "code": -32600,
+          "message": "Plan template reference 'steps.generate.stream.text' was not found."
+        }
+      }
+    },
+    {
+      "id": "streaming_pipeline",
+      "planId": "streaming_pipeline",
+      "traceId": "trace_streaming_pipeline",
+      "status": "failed",
+      "plan": {
+        "id": "streaming_pipeline",
+        "mode": "dag",
+        "timeoutMs": 120000,
+        "stopOnError": true,
+        "steps": [
+          {
+            "id": "generate",
+            "runtime": "openclaw",
+            "method": "agent",
+            "stream": true,
+            "params": {
+              "sessionKey": "uab_demo",
+              "prompt": "In exactly 3 sentences, explain what a multi-agent bridge does and why it matters."
+            }
+          },
+          {
+            "id": "review",
+            "runtime": "openclaw",
+            "streamFrom": [
+              "generate"
+            ],
+            "method": "agent",
+            "params": {
+              "sessionKey": "uab_review",
+              "prompt": "Rate the clarity of the following text 1-10 and explain your score in one sentence:\n\n${steps.generate.stream.text}"
+            }
+          }
+        ]
+      },
+      "createdAt": "2026-07-07T08:09:48.313Z",
+      "updatedAt": "2026-07-07T08:09:49.702Z",
+      "startedAt": "2026-07-07T08:09:48.314Z",
+      "completedAt": "2026-07-07T08:09:49.702Z",
+      "steps": [
+        {
+          "stepId": "generate",
+          "index": 0,
+          "status": "success",
+          "method": "agent",
+          "dependsOn": [],
+          "traceId": "trace_streaming_pipeline.generate",
+          "requestId": "streaming_pipeline_generate",
+          "startedAt": "2026-07-07T08:09:48.315Z",
+          "runtime": "openclaw",
+          "completedAt": "2026-07-07T08:09:49.701Z",
+          "input": {
+            "sessionKey": "uab_demo",
+            "prompt": "In exactly 3 sentences, explain what a multi-agent bridge does and why it matters."
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": "streaming_pipeline_generate",
+            "result": {
+              "runId": "streaming_pipeline_generate",
+              "sessionKey": "agent:main:uab_demo",
+              "status": "accepted",
+              "acceptedAt": 1783411789700
+            }
+          }
+        },
+        {
+          "stepId": "review",
+          "index": 1,
+          "status": "error",
+          "method": "agent",
+          "dependsOn": [],
+          "traceId": "trace_streaming_pipeline.review",
+          "requestId": "streaming_pipeline_review",
+          "streamFrom": [
+            "generate"
+          ],
+          "startedAt": "2026-07-07T08:09:49.608Z",
+          "completedAt": "2026-07-07T08:09:49.609Z",
+          "response": {
+            "jsonrpc": "2.0",
+            "id": "streaming_pipeline_review",
+            "error": {
+              "code": -32600,
+              "message": "Plan template reference 'steps.generate.stream.text' was not found."
+            }
+          }
+        }
+      ],
+      "final": {
+        "jsonrpc": "2.0",
+        "id": "streaming_pipeline_generate",
+        "result": {
+          "runId": "streaming_pipeline_generate",
+          "sessionKey": "agent:main:uab_demo",
+          "status": "accepted",
+          "acceptedAt": 1783411789700
+        }
+      }
+    }
+  ],
+  "updatedAt": "2026-07-07T09:03:57.990Z"
+}

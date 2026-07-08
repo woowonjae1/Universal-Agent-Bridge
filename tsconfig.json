@@ -11,6 +11,8 @@
     { "path": "./packages/adapter-http-jsonrpc" },
     { "path": "./packages/adapter-hermes" },
     { "path": "./packages/adapter-openclaw" },
+    { "path": "./packages/adapter-pi" },
+    { "path": "./packages/adapter-host" },
     { "path": "./packages/transport-http" },
     { "path": "./packages/cli" }
   ]

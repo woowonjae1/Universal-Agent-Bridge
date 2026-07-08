@@ -12,6 +12,8 @@
     { "path": "../adapter-http-jsonrpc" },
     { "path": "../adapter-hermes" },
     { "path": "../adapter-openclaw" },
+    { "path": "../adapter-pi" },
+    { "path": "../adapter-host" },
     { "path": "../mcp" },
     { "path": "../a2a" },
     { "path": "../transport-http" }

@@ -516,6 +516,10 @@ export class AgentBridge {
     return true;
   }
 
+  instantiatePlan(plan: BridgePlan, variables: Record<string, JsonValue>): BridgePlan {
+    return resolveTemplateVariables(plan, variables as Record<string, unknown>) as BridgePlan;
+  }
+
   private createPlanRun(plan: BridgePlan): BridgePlanRunSnapshot {
     const planId = normalizeNonEmptyString(plan.id) ?? `plan_${Date.now().toString(36)}`;
     const runId = this.uniquePlanRunId(planId);
@@ -2112,3 +2116,32 @@ function abortErrorFromSignal(signal?: AbortSignal): Error {
   error.name = "AbortError";
   return error;
 }
+
+function resolveTemplateVariables(value: unknown, variables: Record<string, unknown>): unknown {
+  if (typeof value === "string") {
+    let result = value;
+    for (const [key, val] of Object.entries(variables)) {
+      const placeholder = `{{${key}}}`;
+      if (result.includes(placeholder)) {
+        if (result === placeholder) {
+          return val;
+        }
+        result = result.replaceAll(placeholder, String(val));
+      }
+    }
+    return result;
+  }
+  if (Array.isArray(value)) {
+    return value.map(item => resolveTemplateVariables(item, variables));
+  }
+  if (value !== null && typeof value === "object") {
+    const obj = value as Record<string, unknown>;
+    const res: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(obj)) {
+      res[k] = resolveTemplateVariables(v, variables);
+    }
+    return res;
+  }
+  return value;
+}
+
