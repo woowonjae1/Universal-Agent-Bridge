@@ -1,0 +1,16 @@
+{
+  "allowedPaths": [
+    "d:\\code\\Universal-Agent-Bridge",
+    "C:\\Users\\Administrator\\.gemini\\antigravity\\brain"
+  ],
+  "allowedCommands": [
+    "git status",
+    "git log",
+    "npm run build:packages",
+    "npm test",
+    "node examples/",
+    "echo"
+  ],
+  "enableSandbox": true,
+  "enableExecSandbox": true
+}

@@ -15,6 +15,7 @@
   "dependencies": {
     "@uab/ag-ui": "file:../ag-ui",
     "@uab/core": "file:../core",
-    "@uab/protocol": "file:../protocol"
+    "@uab/protocol": "file:../protocol",
+    "ws": "^8.21.0"
   }
 }

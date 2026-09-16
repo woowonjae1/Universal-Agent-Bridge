@@ -4,6 +4,8 @@ import type {
   BridgeRequest,
   BridgeRequestId,
   BridgeResponse,
+  BridgeSuccessResponse,
+  BridgeErrorResponse,
   JsonValue
 } from "./types.js";
 
@@ -40,11 +42,11 @@ export function createErrorResponse(input: {
   };
 }
 
-export function isErrorResponse(response: BridgeResponse): boolean {
+export function isErrorResponse(response: BridgeResponse): response is BridgeErrorResponse {
   return "error" in response;
 }
 
-export function isSuccessResponse(response: BridgeResponse): boolean {
+export function isSuccessResponse(response: BridgeResponse): response is BridgeSuccessResponse {
   return "result" in response;
 }
 

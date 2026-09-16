@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { WebSocketServer } from "ws";
 import {
   adapterStreamEventToAgUiEvents,
   createAgUiEvent,
@@ -13,6 +14,7 @@ import {
   BRIDGE_ERROR_CODES,
   createErrorResponse
 } from "@uab/protocol";
+import { handleOpenAiRequest } from "./openai-compat.js";
 
 export interface HttpBridgeServerOptions {
   bridge: AgentBridge;
@@ -37,10 +39,15 @@ export function createHttpBridgeServer(options: HttpBridgeServerOptions): Server
   const maxBodyBytes = options.maxBodyBytes ?? 1024 * 1024;
   const cors = options.cors === false ? false : options.cors ?? {};
 
-  return createServer(async (request, response) => {
+  const server = createServer(async (request, response) => {
     try {
       const url = new URL(request.url ?? "/", "http://localhost");
       writeCorsHeaders(response, cors);
+
+      // Handle OpenAI Assistants API endpoints
+      if (await handleOpenAiRequest(request, response, url, options.bridge, maxBodyBytes)) {
+        return;
+      }
 
       if (request.method === "OPTIONS") {
         response.statusCode = 204;
@@ -210,6 +217,121 @@ export function createHttpBridgeServer(options: HttpBridgeServerOptions): Server
         return;
       }
 
+      if (request.method === "GET" && url.pathname === "/workspace/channels") {
+        sendJson(response, 200, options.bridge.workspace.listChannels());
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/workspace/channels") {
+        const payload = await readJsonBody(request, maxBodyBytes) as any;
+        if (!payload || typeof payload !== "object" || !payload.name) {
+          throw new Error("Missing 'name' field for channel creation.");
+        }
+        const channel = options.bridge.workspace.createChannel(payload.name, payload.description);
+        sendJson(response, 201, channel);
+        return;
+      }
+
+      if (request.method === "GET" && url.pathname.startsWith("/workspace/channels/") && url.pathname.endsWith("/messages")) {
+        const parts = url.pathname.split("/");
+        const channelId = parts[3];
+        if (!channelId) throw new Error("Missing channelId.");
+        const limit = readNumber(url.searchParams.get("limit")) ?? 50;
+        sendJson(response, 200, options.bridge.workspace.getMessages(channelId, limit));
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname.startsWith("/workspace/channels/") && url.pathname.endsWith("/messages")) {
+        const parts = url.pathname.split("/");
+        const channelId = parts[3];
+        if (!channelId) throw new Error("Missing channelId.");
+        const payload = await readJsonBody(request, maxBodyBytes) as any;
+        if (!payload || typeof payload !== "object" || !payload.content) {
+          throw new Error("Missing 'content' field for posting message.");
+        }
+        const sender = payload.sender ?? { type: "user", id: "user_default", name: "User" };
+        const userMsg = options.bridge.workspace.postMessage(channelId, sender, payload.content, payload.meta);
+        
+        const runtimes = Array.isArray(payload.runtimes) ? payload.runtimes : [];
+        if (runtimes.length > 0) {
+          options.bridge.coordinator.handleUserMessage(channelId, userMsg, runtimes).catch(err => {
+            console.error("[WorkspaceCoordinator] Error running message cascade:", err);
+          });
+        }
+        
+        sendJson(response, 201, userMsg);
+        return;
+      }
+
+      if (request.method === "GET" && url.pathname.startsWith("/workspace/channels/") && url.pathname.includes("/artifacts")) {
+        const parts = url.pathname.split("/");
+        const channelId = parts[3];
+        if (!channelId) throw new Error("Missing channelId.");
+        
+        if (url.pathname.endsWith("/artifacts")) {
+          sendJson(response, 200, options.bridge.workspace.listArtifacts(channelId));
+          return;
+        }
+
+        if (url.pathname.endsWith("/diff")) {
+          const artifactId = decodeURIComponent(parts[5]);
+          const from = Number(url.searchParams.get("from"));
+          const to = Number(url.searchParams.get("to"));
+          if (Number.isNaN(from) || Number.isNaN(to)) {
+            throw new Error("Missing or invalid 'from' or 'to' version parameters.");
+          }
+          const diff = options.bridge.workspace.getArtifactDiff(channelId, artifactId, from, to);
+          sendJson(response, 200, { diff });
+          return;
+        }
+
+        const artifactId = decodeURIComponent(parts[5]);
+        const artifact = options.bridge.workspace.getArtifact(channelId, artifactId);
+        if (!artifact) {
+          sendJson(response, 404, { error: `Artifact '${artifactId}' not found.` });
+        } else {
+          sendJson(response, 200, artifact);
+        }
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname.startsWith("/workspace/channels/") && url.pathname.includes("/artifacts/")) {
+        const parts = url.pathname.split("/");
+        const channelId = parts[3];
+        const artifactId = decodeURIComponent(parts[5]);
+        if (!channelId || !artifactId) throw new Error("Missing channelId or artifactId.");
+
+        const payload = await readJsonBody(request, maxBodyBytes) as any;
+        if (!payload || typeof payload !== "object" || payload.content === undefined) {
+          throw new Error("Missing 'content' field in artifact payload.");
+        }
+        const sender = payload.sender ?? { type: "system", id: "system_default", name: "System" };
+        const artifact = options.bridge.workspace.saveArtifact(channelId, artifactId, sender, payload.content);
+        sendJson(response, 201, artifact);
+        return;
+      }
+
+      if (request.method === "GET" && url.pathname.startsWith("/workspace/channels/") && url.pathname.endsWith("/events")) {
+        const parts = url.pathname.split("/");
+        const channelId = parts[3];
+        if (!channelId) throw new Error("Missing channelId.");
+        
+        response.statusCode = 200;
+        response.setHeader("content-type", "text/event-stream");
+        response.setHeader("cache-control", "no-cache");
+        response.setHeader("connection", "keep-alive");
+        response.write("event: subscription.established\ndata: {}\n\n");
+        
+        const unsubscribe = options.bridge.workspace.subscribe(channelId, (event) => {
+          response.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+        });
+        
+        request.on("close", () => {
+          unsubscribe();
+        });
+        return;
+      }
+
       if (request.method === "POST" && url.pathname === "/agui/runs") {
         const payload = await readJsonBody(request, maxBodyBytes);
         await sendAgUiRun(request, response, options.bridge, payload);
@@ -243,6 +365,65 @@ export function createHttpBridgeServer(options: HttpBridgeServerOptions): Server
       );
     }
   });
+
+  const wss = new WebSocketServer({ noServer: true });
+
+  wss.on("connection", (ws: any, request: any, channelId: any) => {
+    const unsubscribe = options.bridge.workspace.subscribe(channelId, (event) => {
+      if (ws.readyState === ws.OPEN) {
+        ws.send(JSON.stringify(event));
+      }
+    });
+
+    ws.on("message", async (data: any) => {
+      try {
+        const payload = JSON.parse(data.toString());
+        if (payload.type === "ping") {
+          ws.send(JSON.stringify({ type: "pong" }));
+          return;
+        }
+
+        if (payload.content) {
+          const sender = payload.sender ?? { type: "user", id: "ws_user", name: "WebSocket User" };
+          const userMsg = options.bridge.workspace.postMessage(channelId, sender, payload.content, payload.meta);
+
+          const runtimes = Array.isArray(payload.runtimes) ? payload.runtimes : [];
+          if (runtimes.length > 0) {
+            options.bridge.coordinator.handleUserMessage(channelId, userMsg, runtimes).catch(err => {
+              console.error("[WorkspaceCoordinator WS] Error running message cascade:", err);
+            });
+          }
+        }
+      } catch (err) {
+        if (ws.readyState === ws.OPEN) {
+          ws.send(JSON.stringify({
+            type: "error",
+            message: err instanceof Error ? err.message : String(err)
+          }));
+        }
+      }
+    });
+
+    ws.on("close", () => unsubscribe());
+    ws.on("error", () => unsubscribe());
+  });
+
+  server.on("upgrade", (request: any, socket: any, head: any) => {
+    const url = new URL(request.url ?? "/", "http://localhost");
+    if (url.pathname.startsWith("/workspace/channels/")) {
+      const parts = url.pathname.split("/");
+      const channelId = parts[3];
+      if (channelId) {
+        wss.handleUpgrade(request, socket, head, (ws: any) => {
+          wss.emit("connection", ws, request, channelId);
+        });
+        return;
+      }
+    }
+    socket.destroy();
+  });
+
+  return server;
 }
 
 export function listen(server: Server, options: ListenOptions): Promise<void> {

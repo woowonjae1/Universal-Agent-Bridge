@@ -5,3 +5,6 @@ export * from "./observability.js";
 export * from "./persistent-store.js";
 export * from "./resources.js";
 export * from "./scope-policy.js";
+export * from "./workspace.js";
+export * from "./otel-exporter.js";
+

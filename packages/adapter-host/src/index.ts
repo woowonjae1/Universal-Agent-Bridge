@@ -174,6 +174,61 @@ const METHODS: RuntimeMethodDefinition[] = [
   }
 ];
 
+function statSyncSafe(p: string) {
+  try {
+    return fs.statSync(p);
+  } catch {
+    return null;
+  }
+}
+
+function loadSecurityPolicy(): {
+  allowedPaths: string[];
+  allowedCommands: string[];
+  enableSandbox: boolean;
+  enableExecSandbox: boolean;
+} {
+  const defaultPaths = [
+    process.cwd(),
+    "C:\\Users\\Administrator\\.gemini\\antigravity\\brain"
+  ].map(p => path.resolve(p));
+
+  const defaultCommands = [
+    "git status",
+    "git log",
+    "npm run build:packages",
+    "npm test",
+    "node examples/",
+    "echo"
+  ];
+
+  try {
+    const policyPath = path.join(process.cwd(), ".uab-policy.json");
+    if (fs.existsSync(policyPath)) {
+      const data = JSON.parse(fs.readFileSync(policyPath, "utf8"));
+      return {
+        allowedPaths: Array.isArray(data.allowedPaths)
+          ? data.allowedPaths.map((p: string) => path.resolve(p))
+          : defaultPaths,
+        allowedCommands: Array.isArray(data.allowedCommands)
+          ? data.allowedCommands
+          : defaultCommands,
+        enableSandbox: data.enableSandbox !== false,
+        enableExecSandbox: data.enableExecSandbox !== false
+      };
+    }
+  } catch (e) {
+    // Ignore and fallback
+  }
+
+  return {
+    allowedPaths: defaultPaths,
+    allowedCommands: defaultCommands,
+    enableSandbox: true,
+    enableExecSandbox: true
+  };
+}
+
 export function createHostAdapter(): AgentRuntimeAdapter {
   return {
     info: {
@@ -195,32 +250,61 @@ export function createHostAdapter(): AgentRuntimeAdapter {
     },
     call(request: AdapterCallRequest): unknown {
       const params = isJsonObject(request.params) ? request.params : {};
+      const policy = loadSecurityPolicy();
       
       switch (request.method) {
         case "read_file": {
           const filePath = String(params.path);
+          if (policy.enableSandbox) {
+            const resolved = path.resolve(filePath).toLowerCase();
+            const allowed = policy.allowedPaths.some(p => resolved.startsWith(p.toLowerCase()));
+            if (!allowed) {
+              throw new Error(`Security Exception: Access to path '${filePath}' is restricted by sandboxing policy.`);
+            }
+          }
           return fs.readFileSync(filePath, "utf8");
         }
         case "write_file": {
           const filePath = String(params.path);
           const content = String(params.content);
+          if (policy.enableSandbox) {
+            const resolved = path.resolve(filePath).toLowerCase();
+            const allowed = policy.allowedPaths.some(p => resolved.startsWith(p.toLowerCase()));
+            if (!allowed) {
+              throw new Error(`Security Exception: Access to path '${filePath}' is restricted by sandboxing policy.`);
+            }
+          }
           fs.mkdirSync(path.dirname(filePath), { recursive: true });
           fs.writeFileSync(filePath, content, "utf8");
           return { success: true, path: filePath };
         }
         case "list_dir": {
           const dirPath = String(params.path);
+          if (policy.enableSandbox) {
+            const resolved = path.resolve(dirPath).toLowerCase();
+            const allowed = policy.allowedPaths.some(p => resolved.startsWith(p.toLowerCase()));
+            if (!allowed) {
+              throw new Error(`Security Exception: Access to path '${dirPath}' is restricted by sandboxing policy.`);
+            }
+          }
           return fs.readdirSync(dirPath).map(name => {
-            const stat = fs.statSync(path.join(dirPath, name));
+            const stat = statSyncSafe(path.join(dirPath, name));
             return {
               name,
-              isDirectory: stat.isDirectory(),
-              size: stat.size
+              isDirectory: stat ? stat.isDirectory() : false,
+              size: stat ? stat.size : 0
             };
           });
         }
         case "exec": {
           const cmd = String(params.command);
+          if (policy.enableExecSandbox) {
+            const trimmed = cmd.trim();
+            const allowed = policy.allowedCommands.some(prefix => trimmed.startsWith(prefix));
+            if (!allowed) {
+              throw new Error(`Security Exception: Execution of command '${cmd}' is restricted by command whitelist policy.`);
+            }
+          }
           const output = execSync(cmd, { encoding: "utf8" });
           return { stdout: output };
         }

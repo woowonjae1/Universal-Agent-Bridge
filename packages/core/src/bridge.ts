@@ -34,6 +34,7 @@ import {
   type BridgeResourceWrite
 } from "./resources.js";
 import { AllowAllAccessPolicy, type AccessPolicy } from "./scope-policy.js";
+import { WorkspaceManager, WorkspaceCoordinator } from "./workspace.js";
 
 export interface AgentBridgeOptions {
   adapters?: AgentRuntimeAdapter[];
@@ -159,6 +160,8 @@ export class AgentBridge {
   private readonly roundRobin = new Map<string, number>();
   private readonly planRuns = new Map<string, BridgePlanRunSnapshot>();
   private readonly activePlanRuns = new Map<string, ActivePlanRun>();
+  readonly workspace: WorkspaceManager;
+  readonly coordinator: WorkspaceCoordinator;
 
   constructor(options: AgentBridgeOptions = {}) {
     this.store = options.persistencePath
@@ -191,6 +194,8 @@ export class AgentBridge {
     for (const adapter of options.adapters ?? []) {
       this.register(adapter);
     }
+    this.workspace = new WorkspaceManager();
+    this.coordinator = new WorkspaceCoordinator(this, this.workspace);
   }
 
   register(adapter: AgentRuntimeAdapter): void {
