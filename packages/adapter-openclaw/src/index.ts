@@ -111,6 +111,14 @@ const DEFAULT_METHODS: RuntimeMethodDefinition[] = [
     paramsExample: {}
   },
   {
+    name: "system.logs",
+    title: "System Logs",
+    description: "Read recent OpenClaw system logs.",
+    capability: "system",
+    risk: "read",
+    paramsExample: {}
+  },
+  {
     name: "models.list",
     title: "Models",
     description: "List OpenClaw model catalog entries.",
@@ -141,6 +149,55 @@ const DEFAULT_METHODS: RuntimeMethodDefinition[] = [
     capability: "sessions",
     risk: "read",
     paramsExample: {}
+  },
+  {
+    name: "usage.summary",
+    title: "Usage Summary",
+    description: "Read OpenClaw usage statistics summary.",
+    capability: "usage",
+    risk: "read",
+    paramsExample: {}
+  },
+  {
+    name: "usage.pageSummary",
+    title: "Usage Page Summary",
+    description: "Read OpenClaw usage overview across dimensions (totals, top models, providers, tools, agents, channels, sessions).",
+    capability: "usage",
+    risk: "read",
+    paramsExample: {}
+  },
+  {
+    name: "usage.timeseries",
+    title: "Usage Timeseries",
+    description: "Read OpenClaw usage timeseries for trend charts.",
+    capability: "usage",
+    risk: "read",
+    paramsExample: { granularity: "day" },
+    paramsSchema: {
+      type: "object",
+      properties: {
+        granularity: { type: "string", description: "时间粒度（day / hour / week 等）" }
+      },
+      additionalProperties: false
+    }
+  },
+  {
+    name: "usage.breakdown",
+    title: "Usage Breakdown",
+    description: "Read OpenClaw usage grouped by a dimension.",
+    capability: "usage",
+    risk: "read",
+    paramsExample: { dimension: "model", limit: 20 },
+    paramsSchema: {
+      type: "object",
+      properties: {
+        dimension: { type: "string", enum: ["model", "provider", "agent", "channel", "tool"], description: "分组维度" },
+        limit: { type: "number", description: "返回前 N 条记录（默认 20）" },
+        sortBy: { type: "string", description: "排序字段，如 totalTokens / totalCostUsd" },
+        order: { type: "string", enum: ["asc", "desc"], description: "排序方向" }
+      },
+      additionalProperties: false
+    }
   },
   {
     name: "agent",
@@ -377,12 +434,16 @@ const DEFAULT_METHODS: RuntimeMethodDefinition[] = [
 ];
 
 const CAPABILITIES: RuntimeCapabilities = {
-  system: { read: true, methods: ["health", "status"] },
+  system: { read: true, methods: ["health", "status", "system.logs"] },
   models: { read: true, methods: ["models.list"] },
   sessions: {
     read: true,
     write: true,
     methods: ["sessions.list", "sessions.patch", "sessions.usage"]
+  },
+  usage: {
+    read: true,
+    methods: ["usage.summary", "usage.pageSummary", "usage.timeseries", "usage.breakdown"]
   },
   agent: { read: true, write: true, methods: ["agent", "agent.wait", "agent.stream"] },
   chat: {
@@ -537,6 +598,17 @@ function normalizeOpenClawStandardParams(
   if (method === "artifacts.list") {
     return normalizeOpenClawArtifactsListParams(params, request, context);
   }
+  if (method === "usageBreakdown") {
+    return normalizeOpenClawUsageBreakdownParams(params);
+  }
+  if (method === "usageTimeseries") {
+    return normalizeOpenClawUsageTimeseriesParams(params);
+  }
+  if (method === "usageSummary" || method === "usagePageSummary" || method === "systemLogs") {
+    // These OpenClaw operations accept no request data; drop caller extras so
+    // only documented fields reach the gateway.
+    return {};
+  }
   return params;
 }
 
@@ -594,6 +666,23 @@ function normalizeOpenClawArtifactsListParams(
   copyKnownJsonField(object, output, "sessionId");
   copyKnownJsonField(object, output, "runId");
   copyKnownJsonField(object, output, "taskId");
+  return output;
+}
+
+function normalizeOpenClawUsageBreakdownParams(params: unknown): JsonObject {
+  const object = isJsonObject(params) ? params as JsonObject : {};
+  const output: JsonObject = {};
+  copyKnownJsonField(object, output, "dimension");
+  copyKnownJsonField(object, output, "limit");
+  copyKnownJsonField(object, output, "sortBy");
+  copyKnownJsonField(object, output, "order");
+  return output;
+}
+
+function normalizeOpenClawUsageTimeseriesParams(params: unknown): JsonObject {
+  const object = isJsonObject(params) ? params as JsonObject : {};
+  const output: JsonObject = {};
+  copyKnownJsonField(object, output, "granularity");
   return output;
 }
 
@@ -1005,6 +1094,7 @@ function buildOpenClawCliArgs(method: string, params: unknown): string[] {
         "--timeout",
         readCliTimeout(object)
       ]);
+    case "systemLogs":
     case "logs.tail":
       return compactArgs([
         "logs",
@@ -1486,6 +1576,14 @@ function enrichOpenClawGatewayErrorData(error: JsonObject): JsonValue {
 function mapOpenClawStandardMethod(method: string): string {
   if (method === "agent.stream") return "agent";
   if (method === "chat.stream") return "chat.send";
+  // OpenClaw's usage/system operations are documented as message types in
+  // camelCase (usagePageSummary, systemLogs, ...), not the dotted RPC names
+  // UAB exposes. Map the dotted UAB alias to the documented spelling.
+  if (method === "usage.summary") return "usageSummary";
+  if (method === "usage.pageSummary") return "usagePageSummary";
+  if (method === "usage.timeseries") return "usageTimeseries";
+  if (method === "usage.breakdown") return "usageBreakdown";
+  if (method === "system.logs") return "systemLogs";
   return method;
 }
 

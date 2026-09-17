@@ -106,7 +106,7 @@ For local control-plane methods, CLI mode uses native OpenClaw commands before f
 | `cron.list` | `openclaw cron list --json` |
 | `config.get` | `openclaw config get <path> --json` |
 | `exec.approval.list` | `openclaw approvals get --json` |
-| `logs.tail` | `openclaw logs --json` |
+| `logs.tail`, `system.logs` | `openclaw logs --json` |
 
 This is slower than Gateway mode but often works earlier in a real local setup because it reuses the user's OpenClaw CLI configuration and paired device identity.
 
@@ -114,9 +114,10 @@ This is slower than Gateway mode but often works earlier in a real local setup b
 
 The adapter advertises common OpenClaw Gateway method families:
 
-- `health`, `status`
+- `health`, `status`, `system.logs`
 - `models.list`
 - `sessions.list`, `sessions.patch`, `sessions.usage`
+- `usage.summary`, `usage.pageSummary`, `usage.timeseries`, `usage.breakdown`
 - `agent`, `agent.wait`
 - `agent.stream`
 - `chat.history`, `chat.send`, `chat.stream`, `chat.abort`
@@ -133,6 +134,26 @@ The adapter advertises common OpenClaw Gateway method families:
 - `gateway.call` for raw documented Gateway RPC calls
 
 The raw `gateway.call` method lets the dashboard invoke newly documented OpenClaw RPC methods before UAB adds a first-class convenience entry.
+
+### Usage and system operations
+
+`usage.*` and `system.logs` map UAB's dotted names onto OpenClaw's documented usage/system operation names:
+
+| UAB method | OpenClaw operation | Params |
+| --- | --- | --- |
+| `usage.summary` | `usageSummary` | none |
+| `usage.pageSummary` | `usagePageSummary` | none |
+| `usage.timeseries` | `usageTimeseries` | `granularity` |
+| `usage.breakdown` | `usageBreakdown` | `dimension`, `limit`, `sortBy`, `order` |
+| `system.logs` | `systemLogs` | none |
+
+These operations are documented as OpenClaw message types with camelCase names, so the adapter forwards that exact spelling on the wire; UAB's dotted names only exist for the method catalog. Params are narrowed to the documented fields, so caller extras never reach the gateway. If your Gateway does not register these operations, the call fails with a clear method-not-found error and you can still reach any undocumented name through `gateway.call`.
+
+```bash
+uab call openclaw usage.pageSummary "{}"
+uab call openclaw usage.breakdown "{\"dimension\":\"model\",\"limit\":10}"
+uab call openclaw system.logs "{}"
+```
 
 ## Streaming
 

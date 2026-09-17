@@ -760,6 +760,181 @@ test("OpenClaw CLI fallback maps models.list to fast model status by default", a
   }
 });
 
+test("OpenClaw adapter maps usage.pageSummary to Gateway usagePageSummary", async () => {
+  const server = createServer();
+  const wss = new WebSocketServer({ server });
+  const methods: string[] = [];
+
+  wss.on("connection", (socket: WebSocket) => {
+    socket.on("message", (raw: Buffer) => {
+      const frame = JSON.parse(String(raw)) as { id: string; method: string };
+      methods.push(frame.method);
+      socket.send(JSON.stringify({
+        type: "res",
+        id: frame.id,
+        ok: true,
+        payload: frame.method === "connect"
+          ? { type: "hello-ok", protocol: 4 }
+          : { totals: { totalTokens: 1 } }
+      }));
+    });
+  });
+
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const port = readPort(server);
+
+  try {
+    const adapter = createOpenClawAdapter({ gatewayUrl: `ws://127.0.0.1:${port}` });
+    const result = await adapter.call({
+      method: "usage.pageSummary",
+      params: {},
+      raw: { jsonrpc: "2.0", id: "req", runtime: "openclaw", method: "usage.pageSummary" }
+    }, { requestId: "req", traceId: "trace" });
+
+    assert.deepEqual(result, { totals: { totalTokens: 1 } });
+    assert.deepEqual(methods, ["connect", "usagePageSummary"]);
+  } finally {
+    wss.close();
+    await closeServer(server);
+  }
+});
+
+test("OpenClaw adapter normalizes usage.breakdown params to documented fields", async () => {
+  const server = createServer();
+  const wss = new WebSocketServer({ server });
+  let breakdownParams: Record<string, unknown> | undefined;
+
+  wss.on("connection", (socket: WebSocket) => {
+    socket.on("message", (raw: Buffer) => {
+      const frame = JSON.parse(String(raw)) as {
+        id: string;
+        method: string;
+        params?: Record<string, unknown>;
+      };
+      if (frame.method === "usageBreakdown") breakdownParams = frame.params;
+      socket.send(JSON.stringify({
+        type: "res",
+        id: frame.id,
+        ok: true,
+        payload: frame.method === "connect"
+          ? { type: "hello-ok", protocol: 4 }
+          : { rows: [] }
+      }));
+    });
+  });
+
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const port = readPort(server);
+
+  try {
+    const adapter = createOpenClawAdapter({ gatewayUrl: `ws://127.0.0.1:${port}` });
+    await adapter.call({
+      method: "usage.breakdown",
+      params: { dimension: "model", limit: 20, sortBy: "totalTokens", order: "desc", rogue: "drop-me" },
+      raw: { jsonrpc: "2.0", id: "req", runtime: "openclaw", method: "usage.breakdown" }
+    }, { requestId: "req", traceId: "trace" });
+
+    assert.deepEqual(breakdownParams, {
+      dimension: "model",
+      limit: 20,
+      sortBy: "totalTokens",
+      order: "desc"
+    });
+  } finally {
+    wss.close();
+    await closeServer(server);
+  }
+});
+
+test("OpenClaw adapter maps system.logs to Gateway systemLogs and drops params", async () => {
+  const server = createServer();
+  const wss = new WebSocketServer({ server });
+  const methods: string[] = [];
+  let logsParams: Record<string, unknown> | undefined;
+
+  wss.on("connection", (socket: WebSocket) => {
+    socket.on("message", (raw: Buffer) => {
+      const frame = JSON.parse(String(raw)) as {
+        id: string;
+        method: string;
+        params?: Record<string, unknown>;
+      };
+      methods.push(frame.method);
+      if (frame.method === "systemLogs") logsParams = frame.params;
+      socket.send(JSON.stringify({
+        type: "res",
+        id: frame.id,
+        ok: true,
+        payload: frame.method === "connect"
+          ? { type: "hello-ok", protocol: 4 }
+          : { ok: true, logs: "...", stderr: "" }
+      }));
+    });
+  });
+
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const port = readPort(server);
+
+  try {
+    const adapter = createOpenClawAdapter({ gatewayUrl: `ws://127.0.0.1:${port}` });
+    const result = await adapter.call({
+      method: "system.logs",
+      params: { limit: 5, rogue: "drop-me" },
+      raw: { jsonrpc: "2.0", id: "req", runtime: "openclaw", method: "system.logs" }
+    }, { requestId: "req", traceId: "trace" });
+
+    assert.deepEqual(result, { ok: true, logs: "...", stderr: "" });
+    assert.deepEqual(methods, ["connect", "systemLogs"]);
+    assert.deepEqual(logsParams, {});
+  } finally {
+    wss.close();
+    await closeServer(server);
+  }
+});
+
+test("OpenClaw CLI fallback maps system.logs to openclaw logs", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "uab-openclaw-cli-"));
+  const logPath = join(dir, "calls.jsonl");
+  const cliPath = join(dir, "fake-openclaw.mjs");
+  await writeFile(cliPath, `
+    import { appendFileSync } from "node:fs";
+    appendFileSync(process.env.OPENCLAW_FAKE_LOG, JSON.stringify(process.argv.slice(2)) + "\\n");
+    console.log(JSON.stringify({ ok: true }));
+  `);
+
+  const adapter = createOpenClawAdapter({
+    mode: "cli",
+    cliCommand: `node "${cliPath}"`,
+    timeoutMs: 10_000
+  });
+  const previousLog = process.env.OPENCLAW_FAKE_LOG;
+  process.env.OPENCLAW_FAKE_LOG = logPath;
+
+  try {
+    await adapter.call({
+      method: "system.logs",
+      params: {},
+      raw: { jsonrpc: "2.0", id: "req", runtime: "openclaw", method: "system.logs" }
+    }, { requestId: "req", traceId: "trace" });
+
+    const calls = (await readFile(logPath, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as string[]);
+
+    assert.deepEqual(calls[0], ["logs", "--json", "--limit", "200", "--timeout", "30000"]);
+  } finally {
+    if (previousLog === undefined) {
+      delete process.env.OPENCLAW_FAKE_LOG;
+    } else {
+      process.env.OPENCLAW_FAKE_LOG = previousLog;
+    }
+  }
+});
+
 function readPort(server: ReturnType<typeof createServer>): number {
   const address = server.address();
   assert.equal(typeof address, "object");
