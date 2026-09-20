@@ -848,6 +848,143 @@ test("OpenClaw adapter normalizes usage.breakdown params to documented fields", 
   }
 });
 
+test("OpenClaw adapter drops usage.breakdown values that violate the paramsSchema", async () => {
+  const server = createServer();
+  const wss = new WebSocketServer({ server });
+  let breakdownParams: Record<string, unknown> | undefined;
+
+  wss.on("connection", (socket: WebSocket) => {
+    socket.on("message", (raw: Buffer) => {
+      const frame = JSON.parse(String(raw)) as {
+        id: string;
+        method: string;
+        params?: Record<string, unknown>;
+      };
+      if (frame.method === "usageBreakdown") breakdownParams = frame.params;
+      socket.send(JSON.stringify({
+        type: "res",
+        id: frame.id,
+        ok: true,
+        payload: frame.method === "connect"
+          ? { type: "hello-ok", protocol: 4 }
+          : { rows: [] }
+      }));
+    });
+  });
+
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const port = readPort(server);
+
+  try {
+    const adapter = createOpenClawAdapter({ gatewayUrl: `ws://127.0.0.1:${port}` });
+    await adapter.call({
+      method: "usage.breakdown",
+      params: {
+        dimension: "bogus",
+        limit: "not-a-number",
+        sortBy: 42,
+        order: "sideways"
+      },
+      raw: { jsonrpc: "2.0", id: "req", runtime: "openclaw", method: "usage.breakdown" }
+    }, { requestId: "req", traceId: "trace" });
+
+    assert.deepEqual(breakdownParams, {});
+  } finally {
+    wss.close();
+    await closeServer(server);
+  }
+});
+
+test("OpenClaw adapter keeps only the documented granularity for usage.timeseries", async () => {
+  const server = createServer();
+  const wss = new WebSocketServer({ server });
+  const methods: string[] = [];
+  let timeseriesParams: Record<string, unknown> | undefined;
+
+  wss.on("connection", (socket: WebSocket) => {
+    socket.on("message", (raw: Buffer) => {
+      const frame = JSON.parse(String(raw)) as {
+        id: string;
+        method: string;
+        params?: Record<string, unknown>;
+      };
+      methods.push(frame.method);
+      if (frame.method === "usageTimeseries") timeseriesParams = frame.params;
+      socket.send(JSON.stringify({
+        type: "res",
+        id: frame.id,
+        ok: true,
+        payload: frame.method === "connect"
+          ? { type: "hello-ok", protocol: 4 }
+          : { points: [] }
+      }));
+    });
+  });
+
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const port = readPort(server);
+
+  try {
+    const adapter = createOpenClawAdapter({ gatewayUrl: `ws://127.0.0.1:${port}` });
+    await adapter.call({
+      method: "usage.timeseries",
+      params: { granularity: "hour", rogue: "drop-me" },
+      raw: { jsonrpc: "2.0", id: "req", runtime: "openclaw", method: "usage.timeseries" }
+    }, { requestId: "req", traceId: "trace" });
+
+    assert.deepEqual(methods, ["connect", "usageTimeseries"]);
+    assert.deepEqual(timeseriesParams, { granularity: "hour" });
+  } finally {
+    wss.close();
+    await closeServer(server);
+  }
+});
+
+test("OpenClaw adapter drops a non-string usage.timeseries granularity", async () => {
+  const server = createServer();
+  const wss = new WebSocketServer({ server });
+  let timeseriesParams: Record<string, unknown> | undefined;
+
+  wss.on("connection", (socket: WebSocket) => {
+    socket.on("message", (raw: Buffer) => {
+      const frame = JSON.parse(String(raw)) as {
+        id: string;
+        method: string;
+        params?: Record<string, unknown>;
+      };
+      if (frame.method === "usageTimeseries") timeseriesParams = frame.params;
+      socket.send(JSON.stringify({
+        type: "res",
+        id: frame.id,
+        ok: true,
+        payload: frame.method === "connect"
+          ? { type: "hello-ok", protocol: 4 }
+          : { points: [] }
+      }));
+    });
+  });
+
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const port = readPort(server);
+
+  try {
+    const adapter = createOpenClawAdapter({ gatewayUrl: `ws://127.0.0.1:${port}` });
+    await adapter.call({
+      method: "usage.timeseries",
+      params: { granularity: 7 },
+      raw: { jsonrpc: "2.0", id: "req", runtime: "openclaw", method: "usage.timeseries" }
+    }, { requestId: "req", traceId: "trace" });
+
+    assert.deepEqual(timeseriesParams, {});
+  } finally {
+    wss.close();
+    await closeServer(server);
+  }
+});
+
 test("OpenClaw adapter maps system.logs to Gateway systemLogs and drops params", async () => {
   const server = createServer();
   const wss = new WebSocketServer({ server });

@@ -93,6 +93,9 @@ interface OpenClawStoredDeviceAuth {
 
 const ED25519_SPKI_PREFIX = Buffer.from("302a300506032b6570032100", "hex");
 
+const USAGE_BREAKDOWN_DIMENSIONS: string[] = ["model", "provider", "agent", "channel", "tool"];
+const USAGE_SORT_ORDERS: string[] = ["asc", "desc"];
+
 const DEFAULT_METHODS: RuntimeMethodDefinition[] = [
   {
     name: "health",
@@ -191,10 +194,10 @@ const DEFAULT_METHODS: RuntimeMethodDefinition[] = [
     paramsSchema: {
       type: "object",
       properties: {
-        dimension: { type: "string", enum: ["model", "provider", "agent", "channel", "tool"], description: "分组维度" },
+        dimension: { type: "string", enum: USAGE_BREAKDOWN_DIMENSIONS, description: "分组维度" },
         limit: { type: "number", description: "返回前 N 条记录（默认 20）" },
         sortBy: { type: "string", description: "排序字段，如 totalTokens / totalCostUsd" },
-        order: { type: "string", enum: ["asc", "desc"], description: "排序方向" }
+        order: { type: "string", enum: USAGE_SORT_ORDERS, description: "排序方向" }
       },
       additionalProperties: false
     }
@@ -672,17 +675,17 @@ function normalizeOpenClawArtifactsListParams(
 function normalizeOpenClawUsageBreakdownParams(params: unknown): JsonObject {
   const object = isJsonObject(params) ? params as JsonObject : {};
   const output: JsonObject = {};
-  copyKnownJsonField(object, output, "dimension");
-  copyKnownJsonField(object, output, "limit");
-  copyKnownJsonField(object, output, "sortBy");
-  copyKnownJsonField(object, output, "order");
+  copyKnownEnumField(object, output, "dimension", USAGE_BREAKDOWN_DIMENSIONS);
+  copyKnownNumberField(object, output, "limit");
+  copyKnownStringField(object, output, "sortBy");
+  copyKnownEnumField(object, output, "order", USAGE_SORT_ORDERS);
   return output;
 }
 
 function normalizeOpenClawUsageTimeseriesParams(params: unknown): JsonObject {
   const object = isJsonObject(params) ? params as JsonObject : {};
   const output: JsonObject = {};
-  copyKnownJsonField(object, output, "granularity");
+  copyKnownStringField(object, output, "granularity");
   return output;
 }
 
@@ -723,6 +726,26 @@ function readOpenClawIdempotencyKey(
 
 function copyKnownJsonField(input: JsonObject, output: JsonObject, key: string): void {
   if (input[key] !== undefined) output[key] = input[key];
+}
+
+function copyKnownStringField(input: JsonObject, output: JsonObject, key: string): void {
+  const value = input[key];
+  if (typeof value === "string" && value.trim() !== "") output[key] = value.trim();
+}
+
+function copyKnownNumberField(input: JsonObject, output: JsonObject, key: string): void {
+  const value = input[key];
+  if (typeof value === "number" && Number.isFinite(value)) output[key] = value;
+}
+
+function copyKnownEnumField(
+  input: JsonObject,
+  output: JsonObject,
+  key: string,
+  allowed: readonly string[]
+): void {
+  const value = input[key];
+  if (typeof value === "string" && allowed.includes(value)) output[key] = value;
 }
 
 function readIdLike(value: unknown): string | undefined {
